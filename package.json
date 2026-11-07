@@ -1,0 +1,22 @@
+{
+  "name": "flomo-mcp",
+  "version": "0.1.0",
+  "description": "flomo MCP server：通过 CDP 复用本机 flomo 客户端登录态，查询/编辑笔记与标签",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "flomo-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "patch-flomo": "node scripts/patch-flomo.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.7.0"
+  }
+}
