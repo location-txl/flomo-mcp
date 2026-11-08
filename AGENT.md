@@ -29,8 +29,8 @@ npm run patch-flomo  # ASAR 注入调试口（幂等；flomo 自动更新后需�
 
 ## 修改工具的同步义务（三处 + 文档）
 
-1. `src/tools.ts`：实现导出函数 + 在 `schemas` 对象补 zod schema
-2. `src/index.ts`：`registerTool(name, { description, inputSchema }, handler)`
+1. `src/tools.ts`：实现导出函数 + 在 `schemas` 补输入 schema、在 `outputs` 补输出 schema（可缺失字段用 `.nullable()`，勿返回 undefined 丢字段）
+2. `src/index.ts`：`registerTool(name, { description, inputSchema, outputSchema }, handler)`——SDK 会按 outputSchema 强制校验非错误结果的 structuredContent
 3. `test-e2e.mjs`：补测试（写操作必须闭环清理）
 4. `TOOLS.md`：更新总览表、对应详情节、文末变更记录
 
@@ -49,7 +49,7 @@ npm run patch-flomo  # ASAR 注入调试口（幂等；flomo 自动更新后需�
 
 - TypeScript strict、ES2022、NodeNext：**import 必须带 `.js` 后缀**（`./tools.js`），否则编译报 TS5097。
 - Node ≥ 20（用原生 `WebSocket`/`fetch`，不引 puppeteer/axios 等重依赖；新依赖前先想想是否真的需要）。
-- 无 lint/format 配置，跟随现有风格：中文注释、注释克制（只解释"为什么"）、工具返回纯 JSON 可序列化对象。
+- 无 lint/format 配置，跟随现有风格：中文注释、注释克制（只解释"为什么"）、工具返回纯 JSON 可序列化对象（可缺失字段一律 `null`，不返回 `ok: true` 与参数回显）。
 - flomo.app 路径统一走 `src/cdp.ts` 的 `FLOMO_APP`（环境变量 `FLOMO_APP_PATH` 优先，默认 `/Applications/flomo.app`），不要硬编码到别处。
 
 ## 排查 flomo 更新后的批量失败

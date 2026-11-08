@@ -28,6 +28,27 @@ export interface FlomoTag {
 
 // ---------- 工具实现 ----------
 
+/** tags 字段两种形态（字符串数组 / 对象数组）统一提取为字符串数组 */
+function tagNames(tags: FlomoMemo["tags"]): string[] {
+  return Array.isArray(tags)
+    ? tags.map((t) => (typeof t === "string" ? t : t?.name)).filter((n): n is string => !!n)
+    : [];
+}
+
+/** HTML → 纯文本。&amp; 必须最后解，否则 &amp;lt; 会被二次解码成 < */
+function htmlToText(html: string): string {
+  return html
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export async function whoami() {
   const info = await evalInPage<{
     email: string | null; name: string | null; slug: string | null;
@@ -44,65 +65,56 @@ export async function whoami() {
       tag_count: s && Array.isArray(s.tags) ? s.tags.length : -1
     };
   })()`);
-  if (!info.login) return "flomo 未登录：请打开 flomo 应用登录后重试";
-  return [
-    `flomo 账号: ${info.name ?? info.email}`,
-    `笔记总数: ${info.memo_count}，标签总数: ${info.tag_count}`,
-    `Pro: ${info.pro ? "是" : "否"}`,
-  ].join("\n");
-}
-
-function memoBrief(m: FlomoMemo, contentLen = 200): object {
-  const text = m.content?.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() ?? "";
-  const tags = Array.isArray(m.tags)
-    ? m.tags.map((t) => (typeof t === "string" ? t : t?.name)).filter(Boolean)
-    : [];
+  if (!info.login) throw new Error("flomo 未登录：请打开 flomo 应用登录后重试");
   return {
-    slug: m.slug,
-    created_at: m.created_at,
-    updated_at: m.updated_at,
-    tags,
-    excerpt: text.slice(0, contentLen),
+    account: info.name ?? info.email ?? "未知用户",
+    memo_count: info.memo_count >= 0 ? info.memo_count : null,
+    tag_count: info.tag_count >= 0 ? info.tag_count : null,
+    pro: info.pro,
   };
 }
 
-interface PageCursor { ua: number; slug: string }
+function memoBrief(m: FlomoMemo, contentLen = 200) {
+  return {
+    slug: m.slug,
+    created_at: m.created_at,
+    updated_at: m.updated_at ?? null,
+    tags: tagNames(m.tags),
+    excerpt: htmlToText(m.content ?? "").slice(0, contentLen),
+  };
+}
 
-function encodeCursor(c: PageCursor): string {
+// ---------- 游标 ----------
+// MCP 无服务端状态：游标只编码定位信息，翻页请求幂等重算
+
+interface ListCursor { ua: number; slug: string }
+
+function encodeListCursor(c: ListCursor): string {
   return Buffer.from(JSON.stringify(c), "utf8").toString("base64url");
 }
-function decodeCursor(s: string): PageCursor | null {
-  try { return JSON.parse(Buffer.from(s, "base64url").toString("utf8")) as PageCursor; } catch { return null; }
+function decodeListCursor(s: string): ListCursor | null {
+  try {
+    const c = JSON.parse(Buffer.from(s, "base64url").toString("utf8"));
+    return typeof c?.ua === "number" && typeof c?.slug === "string" ? c : null;
+  } catch { return null; }
 }
 
-/**
- * 列出笔记。mode=recent：最近更新（服务端 cap 200 条，最新在前）；
- * mode=all：全量按更新时间升序翻页（游标）。
- */
-export async function listMemos(limit: number, mode: "recent" | "all", cursor?: string) {
-  if (mode === "recent") {
-    const memos = await callApi<FlomoMemo[]>("GET", "/memo/latest_updated_desc", { limit: 200, tz: tzStr() });
-    const arr = Array.isArray(memos) ? memos : [];
-    return { mode, total: arr.length, memos: arr.slice(0, limit).map((m) => memoBrief(m)) };
-  }
-  const cur = cursor ? decodeCursor(cursor) : null;
-  const params: Record<string, unknown> = { limit: Math.min(Math.max(limit, 1), 100), tz: tzStr() };
-  if (cur?.ua) params.latest_updated_at = cur.ua;
-  if (cur?.slug) params.latest_slug = cur.slug;
-  const memos = await callApi<FlomoMemo[]>("GET", "/memo/updated/", params);
-  const arr = Array.isArray(memos) ? memos : [];
-  const last = arr[arr.length - 1];
-  const next = last && arr.length >= Math.min(limit, 100)
-    ? { next_cursor: encodeCursor({ ua: uaToUnix(String(last.updated_at ?? "")), slug: String(last.slug ?? "") }) }
-    : {};
-  return { mode, total: arr.length, ...next, memos: arr.map((m) => memoBrief(m)) };
+interface SearchCursor { kw: string; offset: number }
+
+function encodeSearchCursor(c: SearchCursor): string {
+  return Buffer.from(JSON.stringify(c), "utf8").toString("base64url");
+}
+function decodeSearchCursor(s: string): SearchCursor | null {
+  try {
+    const c = JSON.parse(Buffer.from(s, "base64url").toString("utf8"));
+    return typeof c?.kw === "string" && typeof c?.offset === "number" ? c : null;
+  } catch { return null; }
 }
 
-export async function searchMemos(keyword: string, limit: number) {
-  const kw = keyword.toLowerCase();
+/** 全量拉取笔记（升序 unix 游标翻页），最多 40 页保护。返回是否打满上限 */
+async function scanAllMemos(): Promise<{ memos: FlomoMemo[]; truncated: boolean }> {
   const all: FlomoMemo[] = [];
-  let cur: PageCursor | null = null;
-  // /memo/updated/ 升序全量翻页（unix 游标），上限 40 页保护
+  let cur: ListCursor | null = null;
   for (let page = 0; page < 40; page++) {
     const params: Record<string, unknown> = { limit: 100, tz: tzStr() };
     if (cur?.ua) params.latest_updated_at = cur.ua;
@@ -110,24 +122,72 @@ export async function searchMemos(keyword: string, limit: number) {
     const batch = await callApi<FlomoMemo[]>("GET", "/memo/updated/", params);
     const arr = Array.isArray(batch) ? batch : [];
     all.push(...arr);
-    if (arr.length < 100) break;
+    if (arr.length < 100) return { memos: all, truncated: false };
+    if (page === 39) return { memos: all, truncated: true };
     const last = arr[arr.length - 1];
     cur = { ua: uaToUnix(String(last.updated_at ?? "")), slug: String(last.slug ?? "") };
   }
+  return { memos: all, truncated: false };
+}
 
+/**
+ * 列出笔记。mode=recent：最近更新（服务端 cap 200 条，最新在前）；
+ * mode=all：全量按更新时间升序翻页（游标，每页最多 100 条）。
+ */
+export async function listMemos(limit: number, mode: "recent" | "all", cursor?: string) {
+  if (mode === "recent") {
+    const memos = await callApi<FlomoMemo[]>("GET", "/memo/latest_updated_desc", { limit: 200, tz: tzStr() });
+    const arr = (Array.isArray(memos) ? memos : []).slice(0, limit);
+    return { mode, count: arr.length, memos: arr.map((m) => memoBrief(m)) };
+  }
+  const cur = cursor !== undefined ? decodeListCursor(cursor) : null;
+  if (cursor !== undefined && !cur) {
+    throw new Error("翻页游标无效，请从第一页重新开始（不传 cursor 参数）");
+  }
+  const pageSize = Math.min(limit, 100);
+  const params: Record<string, unknown> = { limit: pageSize, tz: tzStr() };
+  if (cur?.ua) params.latest_updated_at = cur.ua;
+  if (cur?.slug) params.latest_slug = cur.slug;
+  const memos = await callApi<FlomoMemo[]>("GET", "/memo/updated/", params);
+  const arr = Array.isArray(memos) ? memos : [];
+  const last = arr[arr.length - 1];
+  const next = last && arr.length >= pageSize
+    ? { next_cursor: encodeListCursor({ ua: uaToUnix(String(last.updated_at ?? "")), slug: String(last.slug ?? "") }) }
+    : {};
+  return { mode, count: arr.length, ...next, memos: arr.map((m) => memoBrief(m)) };
+}
+
+/**
+ * 关键词搜索（正文与标签）。flomo 无远程搜索接口，每次调用全量拉取后本地过滤；
+ * 翻页游标编码 {kw, offset}，翻页时重新扫描按偏移切片。
+ */
+export async function searchMemos(keyword: string, limit: number, cursor?: string) {
+  let offset = 0;
+  if (cursor !== undefined) {
+    const c = decodeSearchCursor(cursor);
+    if (!c) throw new Error("翻页游标无效，请从第一页重新搜索（不传 cursor 参数）");
+    if (c.kw !== keyword) throw new Error("翻页游标与 keyword 不匹配，请从第一页重新搜索");
+    offset = c.offset;
+  }
+  const { memos: all, truncated } = await scanAllMemos();
+  const kw = keyword.toLowerCase();
   const hits = all.filter((m) => {
-    const text = (m.content ?? "").replace(/<[^>]+>/g, " ").toLowerCase();
-    const tags = Array.isArray(m.tags)
-      ? m.tags.map((t) => (typeof t === "string" ? t : t?.name ?? "")).join(" ").toLowerCase()
-      : "";
+    const text = htmlToText(m.content ?? "").toLowerCase();
+    const tags = tagNames(m.tags).join(" ").toLowerCase();
     return text.includes(kw) || tags.includes(kw);
   }).sort((a, b) => String(b.updated_at ?? b.created_at).localeCompare(String(a.updated_at ?? a.created_at)));
 
+  const page = hits.slice(offset, offset + limit);
+  const next = offset + limit < hits.length
+    ? { next_cursor: encodeSearchCursor({ kw: keyword, offset: offset + limit }) }
+    : {};
   return {
-    keyword,
+    complete: !truncated,
     scanned: all.length,
     matched: hits.length,
-    memos: hits.slice(0, limit).map((m) => memoBrief(m)),
+    count: page.length,
+    ...next,
+    memos: page.map((m) => memoBrief(m)),
   };
 }
 
@@ -146,10 +206,10 @@ export async function getMemo(slug: string) {
   return {
     slug: d.slug,
     created_at: d.created_at,
-    updated_at: d.updated_at,
-    tags: Array.isArray(d.tags) ? d.tags : [],
+    updated_at: d.updated_at ?? null,
+    tags: tagNames(d.tags),
     content_html: d.content,
-    content_text: d.content?.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
+    content_text: htmlToText(d.content ?? ""),
   };
 }
 
@@ -164,7 +224,8 @@ export async function createMemo(content: string) {
   const slug = (data && typeof data === "object" && !Array.isArray(data))
     ? (data as { slug?: string }).slug ?? null
     : null;
-  return { ok: true, slug, note: "创建成功。标签请在 content 中使用 #标签名 语法" };
+  if (!slug) throw new Error("flomo 创建响应异常：未返回 slug，请用 list_memos 确认笔记是否实际已创建");
+  return { slug };
 }
 
 export async function updateMemo(slug: string, content: string) {
@@ -180,18 +241,18 @@ export async function updateMemo(slug: string, content: string) {
     tz: tzStr(),
     pin,
   });
-  return { ok: true, slug, updated_at: nowStr() };
+  return { slug };
 }
 
 export async function deleteMemo(slug: string) {
   await callApi("DELETE", `/memo/${encodeURIComponent(slug)}`);
-  return { ok: true, slug, note: "已移入回收站" };
+  return { slug, note: "已移入回收站" };
 }
 
 type TagBrief = { id: number; name: string; pinned: boolean; count?: number };
 
 /** 全量标签获取：优先 Vuex 内存直读（flomo 已同步全量，含 id），fallback /tag/updated/ */
-async function fetchAllTags(): Promise<{ source: "memory" | "api"; tags: TagBrief[] }> {
+async function fetchAllTags(): Promise<TagBrief[]> {
   const fromStore = await evalInPage<{ ok: boolean; total: number; tags?: TagBrief[] }>(`(function(){
     try{
       const s=window.__flomoVuexStore.state;
@@ -202,9 +263,9 @@ async function fetchAllTags(): Promise<{ source: "memory" | "api"; tags: TagBrie
     }catch(e){return{ok:false}}
   })()`);
   if (fromStore?.ok && fromStore.tags?.length) {
-    return { source: "memory", tags: fromStore.tags };
+    return fromStore.tags;
   }
-  // fallback：API（服务器每页较小，unix 游标循环）
+  // fallback：API（服务器每页较小，unix 游标循环；无 count）
   const all: FlomoTag[] = [];
   let curUa = 0;
   let curId: number | null = null;
@@ -222,16 +283,13 @@ async function fetchAllTags(): Promise<{ source: "memory" | "api"; tags: TagBrie
     curId = last.id;
     if (arr.length < 8) break;
   }
-  return {
-    source: "api",
-    tags: all.map((t) => ({ id: t.id, name: t.name, pinned: !!t.pin, count: undefined })),
-  };
+  return all.map((t) => ({ id: t.id, name: t.name, pinned: !!t.pin, count: undefined }));
 }
 
 /** 标签树浏览：不传 tagName 返回一级标签；传 tagName 返回其直接子级（recursive=true 时全部后代）。
  *  flomo 标签扁平存储，层级只是名字里的 "/" 约定，树结构在本地按前缀推导。 */
 export async function listTags(tagName?: string, recursive = false) {
-  const { source, tags } = await fetchAllTags();
+  const tags = await fetchAllTags();
   const byName = (a: { name: string }, b: { name: string }) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 
   // 全部节点名 = 实体标签 + 仅作为前缀存在的虚拟中间层（如只建过 #阅读/读书/小说 而无 #阅读/读书）。
@@ -249,22 +307,22 @@ export async function listTags(tagName?: string, recursive = false) {
       directOf.set(p, (directOf.get(p) ?? 0) + 1);
     }
   }
+  // 某节点下的实体后代总数（含多层）
+  const descCount = (name: string) => tags.filter((t) => t.name.startsWith(name + "/")).length;
 
   if (!tagName) {
     // 一级视图：按第一段聚合。仅作前缀出现的虚拟一级（如只建过 #阅读/读书）没有实体 id，记 null
-    const groups = new Map<string, { id: number | null; pinned: boolean; count: number | undefined; descendants: number }>();
+    const groups = new Map<string, { id: number | null; pinned: boolean; count: number | undefined }>();
     for (const t of tags) {
       const top = t.name.split("/")[0];
       let g = groups.get(top);
       if (!g) {
-        g = { id: null, pinned: false, count: undefined, descendants: 0 };
+        g = { id: null, pinned: false, count: undefined };
         groups.set(top, g);
       }
       if (t.name === top) {
         g.id = t.id;
         g.pinned = t.pinned;
-      } else {
-        g.descendants++;
       }
       if (typeof t.count === "number") g.count = (g.count ?? 0) + t.count;
     }
@@ -272,11 +330,11 @@ export async function listTags(tagName?: string, recursive = false) {
       name,
       id: g.id,
       pinned: g.pinned,
-      count: g.count,
+      count: g.count ?? null,
       direct_children: directOf.get(name) ?? 0,
-      total_descendants: g.descendants,
+      total_descendants: descCount(name),
     })).sort((a, b) => (a.pinned === b.pinned ? byName(a, b) : a.pinned ? -1 : 1));
-    return { source, scope: "top" as const, total: list.length, tags: list };
+    return { count: list.length, tags: list };
   }
 
   const parent = tagName.trim().replace(/^\/+|\/+$/g, "");
@@ -285,9 +343,9 @@ export async function listTags(tagName?: string, recursive = false) {
   const descendants = tags.filter((t) => t.name.startsWith(prefix));
   // 既不是任何标签名、也不是任何标签前缀 → 输入有误；叶子标签查子级返回空列表属正常
   if (!tags.some((t) => t.name === parent) && descendants.length === 0) {
-    throw new Error(`标签不存在：${parent}`);
+    throw new Error(`标签不存在：${parent}。请先调用 list_tags（不带参数）确认标签名`);
   }
-  type Row = { id: number | null; name: string; pinned: boolean; count: number | undefined; direct_children: number };
+  type Row = { id: number | null; name: string; pinned: boolean; count: number | null; direct_children: number; total_descendants: number };
   let list: Row[];
   if (recursive) {
     // 全部后代只返回实体标签
@@ -295,8 +353,9 @@ export async function listTags(tagName?: string, recursive = false) {
       id: t.id,
       name: t.name,
       pinned: t.pinned,
-      count: t.count,
+      count: t.count ?? null,
       direct_children: directOf.get(t.name) ?? 0,
+      total_descendants: descCount(t.name),
     }));
   } else {
     // 直接子级：实体子级原样返回；中间层无实体的合成虚拟节点（id=null，count 为其下实体合计），
@@ -321,31 +380,53 @@ export async function listTags(tagName?: string, recursive = false) {
       id: c.id,
       name,
       pinned: c.pinned,
-      count: c.count,
+      count: c.count ?? null,
       direct_children: directOf.get(name) ?? 0,
+      total_descendants: descCount(name),
     }));
   }
-  return { source, scope: "children" as const, parent, recursive, total: list.length, tags: list.sort(byName) };
+  return { count: list.length, tags: list.sort(byName) };
 }
 
 /** 标签重命名：走 /tag/rename 按名字操作（服务器裁决存在性；Vuex 快照可能滞后于新标签） */
 export async function renameTag(oldName: string, newName: string) {
-  await callApi("POST", "/tag/rename", { old_tag: oldName.trim(), new_tag: newName.trim() });
-  return { ok: true, from: oldName, to: newName };
+  const from = oldName.trim();
+  const to = newName.trim();
+  await callApi("POST", "/tag/rename", { old_tag: from, new_tag: to });
+  return { from, to };
 }
 
 export async function pinTag(tagName: string, pin: boolean) {
-  await callApi("POST", pin ? "/tag/pin" : "/tag/unpin", { tag: tagName.trim(), tz: tzStr() });
-  return { ok: true, tag: tagName, pinned: pin };
+  const tag = tagName.trim();
+  await callApi("POST", pin ? "/tag/pin" : "/tag/unpin", { tag, tz: tzStr() });
+  return { tag, pinned: pin };
 }
 
 // ---------- zod schemas（MCP 注册用） ----------
 
+const memoBriefShape = {
+  slug: z.string().describe("笔记唯一标识，用于 get/update/delete"),
+  created_at: z.string().describe("创建时间 YYYY-MM-DD HH:mm:ss（本地时区）"),
+  updated_at: z.string().nullable().describe("更新时间；null 表示 flomo 未返回"),
+  tags: z.array(z.string()).describe("标签名列表（含完整层级路径）"),
+  excerpt: z.string().describe("正文纯文本摘要（前 200 字符）"),
+};
+
+const tagRowShape = {
+  id: z.number().int().nullable().describe("标签 id；null 表示虚拟中间层节点（无实体标签）"),
+  name: z.string().describe("标签名（含完整层级路径，如 阅读/读书）"),
+  pinned: z.boolean(),
+  count: z.number().int().nullable().describe("笔记计数；null 表示不可用"),
+  direct_children: z.number().int().describe("直接子级数，0 即叶子"),
+  total_descendants: z.number().int().describe("其下所有层级的实体标签总数"),
+};
+
 export const schemas = {
-  limit: z.number().int().min(1).max(200).default(20).describe("返回条数"),
-  mode: z.enum(["recent", "all"]).default("recent").describe("recent=最近更新(最新在前，最多200条)；all=全量按时间升序翻页"),
+  limit: z.number().int().min(1).max(200).default(20).describe("返回条数（mode=all 时每页最多 100 条，超出按 100 执行）"),
+  mode: z.enum(["recent", "all"]).default("recent").describe("recent=最近更新(最新在前，最多200条)；all=全量按时间升序翻页(每页≤100)"),
   cursor: z.string().optional().describe("翻页游标（上次返回的 next_cursor，仅 mode=all）"),
-  keyword: z.string().min(1).describe("搜索关键词（匹配正文与标签）"),
+  searchCursor: z.string().optional().describe("翻页游标（上次返回的 next_cursor，必须配合首次搜索的同一 keyword）"),
+  keyword: z.string().min(1).describe("搜索关键词（匹配正文与标签，大小写不敏感）"),
   slug: z.string().describe("笔记 slug"),
   content: z.string().min(1).describe("笔记内容，支持 HTML 与 #标签名 语法"),
   oldName: z.string().describe("当前标签名"),
@@ -353,4 +434,45 @@ export const schemas = {
   tagName: z.string().describe("标签名"),
   tagNameQuery: z.string().min(1).optional().describe("父标签名，支持任意层级路径（如 阅读 或 阅读/读书）。不传则返回一级标签"),
   recursive: z.boolean().default(false).describe("传入 tag_name 时：true=返回其下所有层级后代；false=仅直接子级"),
+};
+
+// 输出 schema：SDK 注册后对非错误结果强制校验 structuredContent
+export const outputs = {
+  whoami: {
+    account: z.string().describe("账号显示名（无名称时为脱敏邮箱）"),
+    memo_count: z.number().int().nullable(),
+    tag_count: z.number().int().nullable(),
+    pro: z.boolean(),
+  },
+  listMemos: {
+    mode: z.enum(["recent", "all"]),
+    count: z.number().int().describe("本次返回条数（非全量总数）"),
+    next_cursor: z.string().optional().describe("存在即还有下一页，原样传入下次调用"),
+    memos: z.array(z.object(memoBriefShape)),
+  },
+  searchMemos: {
+    complete: z.boolean().describe("false=触达 40 页扫描上限，结果可能不全"),
+    scanned: z.number().int().describe("本次实际扫描笔记数"),
+    matched: z.number().int().describe("匹配总数"),
+    count: z.number().int().describe("本次返回条数"),
+    next_cursor: z.string().optional().describe("存在即匹配结果未取完，原样传入下次调用（keyword 不变）"),
+    memos: z.array(z.object(memoBriefShape)),
+  },
+  getMemo: {
+    slug: z.string(),
+    created_at: z.string(),
+    updated_at: z.string().nullable(),
+    tags: z.array(z.string()),
+    content_html: z.string().describe("原始 HTML，update_memo 需基于此修改回写"),
+    content_text: z.string().describe("纯文本（已解码 HTML 实体）"),
+  },
+  createMemo: { slug: z.string() },
+  updateMemo: { slug: z.string() },
+  deleteMemo: { slug: z.string(), note: z.string().describe("已移入回收站，可在 flomo 回收站恢复") },
+  listTags: {
+    count: z.number().int().describe("本次返回的标签节点数"),
+    tags: z.array(z.object(tagRowShape)),
+  },
+  renameTag: { from: z.string(), to: z.string() },
+  pinTag: { tag: z.string(), pinned: z.boolean() },
 };

@@ -13,7 +13,7 @@
 |---|---|---|---|---|---|
 | 1 | `whoami` | 只读 | 验证连接：账号/笔记数/标签数 | Vuex + localStorage 直读（无网络请求） | `whoami` |
 | 2 | `list_memos` | 只读 | 列笔记：recent 最近 200 条 / all 全量翻页 | `GET /memo/latest_updated_desc`、`GET /memo/updated/` | `listMemos` |
-| 3 | `search_memos` | 只读 | 关键词搜正文与标签 | `GET /memo/updated/` 全量翻页 + 本地过滤 | `searchMemos` |
+| 3 | `search_memos` | 只读 | 关键词搜正文与标签（支持游标翻页） | `GET /memo/updated/` 全量翻页 + 本地过滤 | `searchMemos` |
 | 4 | `get_memo` | 只读 | 单条笔记全文（HTML + 纯文本） | `GET /memo/<slug>` | `getMemo` |
 | 5 | `create_memo` | 写 | 创建笔记 | `PUT /memo` | `createMemo` |
 | 6 | `update_memo` | 写 | 更新笔记内容（保留元数据） | `GET /memo/<slug>` + `PUT /memo/<slug>` | `updateMemo` |
@@ -21,15 +21,17 @@
 | 8 | `list_tags` | 只读 | 标签树浏览：无参=一级；`tag_name`=直接子级；+`recursive`=全部后代 | Vuex `state.tags` 直读；fallback `GET /tag/updated/`；层级按名字 `/` 本地推导 | `listTags` |
 | 9 | `rename_tag` | 写 | 重命名标签 | `POST /tag/rename` | `renameTag` |
 | 10 | `pin_tag` | 写 | 置顶标签 | `POST /tag/pin` | `pinTag` |
-| 11 | `unpin_tag` | 写 | 取消置顶 | `POST /tag/unpin` | `pinTag` |
+| 11 | `unpin_tag` | 写 | 取消置顶标签 | `POST /tag/unpin` | `pinTag` |
 
 ## 通用约定
 
 **调用链路**：所有工具 → `evalInPage()`（CDP `Runtime.evaluate`，每次新建 WebSocket 短连接，超时 20s）→ flomo 页面上下文 → `$api.callPromise()`。flomo 未带调试口时先自动拉起（`src/cdp.ts` `ensureFlomo`）。
 
-**成功返回**：`src/index.ts` 将工具返回值 `JSON.stringify` 后以 text content 返回，结构见各工具。
+**成功返回**：每个工具都声明 `outputSchema`，并同时返回 `structuredContent`（结构化数据，SDK 按 schema 强制校验）与 `content`（同一 JSON 的文本序列化，向后兼容）。可缺失字段一律为 `null`（不丢字段），列表工具的 `count` 指**本次返回条数**而非全量总数。
 
-**错误返回**：`isError: true`，文本为 `❌ <message>`。API 错误码语义：
+**分页约定**：返回 `next_cursor` 即表示还有下一页，原样传入下次调用即可；无该字段即已取完。游标无效或与当次参数不匹配时**报错**（而非静默重置），错误信息会说明如何从第一页重来。
+
+**错误返回**：`isError: true`，文本为可行动的错误信息（说明原因与修正方式）。API 错误码语义：
 
 | code | 含义 | 处理建议 |
 |---|---|---|
@@ -41,7 +43,7 @@
 **数据格式**（flomo 约定，工具内部已处理）：
 
 - `slug`：笔记唯一标识（base62 字符串），所有单笔记操作以它定位
-- `created_at` / `updated_at`：`"YYYY-MM-DD HH:mm:ss"` 本地时区字符串
+- `created_at` / `updated_at`：`"YYYY-MM-DD HH:mm:ss"` 本地时区字符串；输出中不可用时为 `null`
 - `tz`：`"H:M"` 时区偏移（如东八区 `"8:0"`）
 - 翻页游标 `latest_updated_at`：**unix 秒**（传字符串会被服务端静默忽略——实测踩坑）
 
@@ -52,23 +54,25 @@
 验证 flomo 连接，无参数。
 
 ```json
-{ "login": true, "email": "us***@example.com", "name": null, "slug": "…",
-  "pro": false, "memo_count": 370, "tag_count": 111 }
+{ "account": "location", "memo_count": 371, "tag_count": 107, "pro": true }
 ```
 
-未登录时返回提示文本（非错误）。email 已脱敏（保留前 2 位 + 域名）。
+- 未登录时报错（`isError: true`），提示打开 flomo 应用登录
+- `account`：显示名，无名称时为脱敏邮箱（保留前 2 位 + 域名）
+- `memo_count` / `tag_count`：flomo 页面内存不可用时为 `null`
 
 ## 2. `list_memos`
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
-| `limit` | int 1–200 | 否 | 20 | 返回条数 |
+| `limit` | int 1–200 | 否 | 20 | 返回条数（all 模式每页最多 100 条，超出按 100 执行） |
 | `mode` | `"recent"` \| `"all"` | 否 | `recent` | recent=最近更新（最新在前，服务端上限 200 条）；all=全量按更新时间升序游标翻页 |
 | `cursor` | string | 否 | — | 翻页游标，传上次返回的 `next_cursor`（仅 mode=all） |
 
-返回：`{ mode, total, next_cursor?, memos: [ { slug, created_at, updated_at, tags[], excerpt } ] }`
+返回：`{ mode, count, next_cursor?, memos: [ { slug, created_at, updated_at|null, tags[], excerpt } ] }`
 
-- `excerpt` 为去 HTML 标签后的前 200 字符；翻页到尾页时无 `next_cursor`
+- `excerpt` 为去 HTML 标签（已解码实体）后的前 200 字符；翻页到尾页时无 `next_cursor`
+- 游标无效时报错"请从第一页重新开始（不传 cursor 参数）"
 - recent 用 `/memo/latest_updated_desc`（服务端 cap 200）；all 用 `/memo/updated/`（每页 ≤100）
 
 ## 3. `search_memos`
@@ -76,11 +80,14 @@
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `keyword` | string | 是 | — | 关键词，大小写不敏感，匹配正文（去 HTML）与标签 |
-| `limit` | int 1–200 | 否 | 20 | 命中后最多返回条数 |
+| `limit` | int 1–200 | 否 | 20 | 本次返回条数 |
+| `cursor` | string | 否 | — | 翻页游标，传上次返回的 `next_cursor`，`keyword` 必须与首次搜索一致 |
 
-返回：`{ keyword, scanned, matched, memos[…] }`（结构同上，按更新时间降序）
+返回：`{ complete, scanned, matched, count, next_cursor?, memos[…] }`（memos 结构同上，按更新时间降序）
 
-> flomo 桌面端**没有远程搜索接口**（应用内搜索走本地 IndexedDB），本工具为全量拉取后本地过滤，保护上限 40 页（4000 条）。笔记量大时考虑放宽。
+- `matched`=匹配总数，`count`=本次返回条数；`matched > count` 时用 `next_cursor` 取下一页
+- `complete: false` 表示触达 40 页（4000 条）扫描保护上限，结果可能不全
+- flomo 桌面端**没有远程搜索接口**（应用内搜索走本地 IndexedDB），本工具为全量拉取后本地过滤；游标编码 `{kw, offset}`，翻页时重新扫描按偏移切片（无服务端状态），翻页期间笔记更新可能导致少量偏移
 
 ## 4. `get_memo`
 
@@ -88,9 +95,10 @@
 |---|---|---|---|
 | `slug` | string | 是 | 笔记 slug |
 
-返回：`{ slug, created_at, updated_at, tags[], content_html, content_text }`
+返回：`{ slug, created_at, updated_at|null, tags[], content_html, content_text }`
 
-> `GET /memo/<slug>` 的响应可能是对象或单元素数组，`fetchMemoRaw()` 已统一处理。
+- `tags` 统一为字符串数组（含层级路径）；`content_text` 已解码常见 HTML 实体
+- `GET /memo/<slug>` 的响应可能是对象或单元素数组，`fetchMemoRaw()` 已统一处理
 
 ## 5. `create_memo`
 
@@ -98,7 +106,7 @@
 |---|---|---|---|
 | `content` | string | 是 | 笔记内容，支持 HTML；**标签用 `#标签名` 语法写在内容里**（flomo 无独立建标签接口，标签由内容隐式创建） |
 
-返回：`{ ok: true, slug, note }`
+返回：`{ slug }`。响应未返回 slug 时报错（提示用 `list_memos` 确认是否实际已创建）。
 
 ## 6. `update_memo`
 
@@ -107,7 +115,7 @@
 | `slug` | string | 是 | 笔记 slug |
 | `content` | string | 是 | 新内容（全量替换，非追加） |
 
-返回：`{ ok: true, slug, updated_at }`
+返回：`{ slug }`。
 
 实现先 `GET /memo/<slug>` 取原笔记，自动保留 `created_at`、`file_ids`（附件）、`pin`，再带 `local_updated_at`（unix 秒）提交。**content 是整篇替换**，先 `get_memo` 再改更稳妥。
 
@@ -117,7 +125,7 @@
 |---|---|---|---|
 | `slug` | string | 是 | 笔记 slug |
 
-返回：`{ ok: true, slug, note: "已移入回收站" }`。可在 flomo 回收站恢复。
+返回：`{ slug, note: "已移入回收站" }`。可在 flomo 回收站恢复。
 
 ## 8. `list_tags`
 
@@ -128,27 +136,20 @@
 | `tag_name` | string | 否 | 父标签名，支持任意层级路径（如 `阅读` 或 `阅读/读书`）。不传则返回一级标签 |
 | `recursive` | boolean | 否 | 默认 `false`。传入 `tag_name` 时：`true`=其下所有层级后代；`false`=仅直接子级 |
 
-不传参数（一级视图）：
+返回：`{ count, tags: [ { id, name, pinned, count, direct_children, total_descendants } ] }`
 
 ```json
-{ "source": "memory|api", "scope": "top", "total": 3,
-  "tags": [ { "name": "阅读", "id": null, "pinned": false, "count": 12,
-              "direct_children": 2, "total_descendants": 3 } ] }
+{ "count": 2,
+  "tags": [ { "id": 1, "name": "阅读/读书", "pinned": false, "count": 5, "direct_children": 0, "total_descendants": 0 },
+            { "id": null, "name": "阅读/杂谈", "pinned": false, "count": 7, "direct_children": 2, "total_descendants": 3 } ] }
 ```
 
-传 `tag_name`（子级视图）：
-
-```json
-{ "source": "memory|api", "scope": "children", "parent": "阅读", "recursive": false, "total": 2,
-  "tags": [ { "id": 1, "name": "阅读/读书", "pinned": false, "count": 5, "direct_children": 0 },
-            { "id": null, "name": "阅读/杂谈", "pinned": false, "count": 7, "direct_children": 2 } ] }
-```
-
-- 一级 `id`：实体标签有 id；仅作为前缀出现的虚拟一级（只建过 `#阅读/读书` 而从未单独用过 `#阅读`）为 `null`
-- 一级 `count`：分支内所有标签 count 之和（计数合计，可能重复计数；api fallback 路径无此字段）；排序：置顶优先，其余按名字
-- 子级返回完整 name（含路径），`direct_children=0` 即叶子，无需继续下钻
-- 中间层无实体的直接子级会合成虚拟节点（`id: null`，`count` 为其下实体合计，api fallback 无 count），供继续下钻；`recursive=true` 只返回实体标签
-- `tag_name` 既非任何标签名也非任何前缀时报错；叶子标签查子级返回空列表属正常
+- `id: null` 表示虚拟中间层节点（只建过 `#阅读/杂谈/xx` 而从未单独用过 `#阅读/杂谈`）
+- `count`：一级视图为分支内合计（可能重复计数）；`null` 表示计数不可用（API fallback 路径无 count）
+- `direct_children=0` 即叶子，无需继续下钻；`total_descendants` 为其下所有层级的实体标签总数
+- 子级返回完整 name（含路径）；`recursive=true` 只返回实体标签
+- `tag_name` 既非任何标签名也非任何前缀时报错（附恢复提示）；叶子标签查子级返回空列表属正常
+- 一级视图排序：置顶优先，其余按名字
 - 数据获取：优先 Vuex `state.tags` 内存直读（毫秒级、全量、含 count）；flomo 未完成同步时 fallback `/tag/updated/` 游标翻页（**服务端每页仅 ~8 条**，属已知的窗口限制，此时无 count）
 
 ## 9. `rename_tag`
@@ -158,7 +159,7 @@
 | `old_name` | string | 是 | 当前标签名 |
 | `new_name` | string | 是 | 新标签名，层级用 `/` 分隔（如 `阅读/读书`） |
 
-返回：`{ ok: true, from, to }`
+返回：`{ from, to }`（trim 后的规范化名称）。
 
 按**名字**调 `/tag/rename`，存在性由服务器裁决（不依赖 Vuex 快照——新建标签在 Vuex 里可能滞后）。
 
@@ -168,7 +169,7 @@
 |---|---|---|---|
 | `tag` | string | 是 | 标签名 |
 
-返回：`{ ok: true, tag, pinned: true|false }`
+返回：`{ tag, pinned }`。
 
 ---
 
@@ -185,16 +186,17 @@
 
 ### 已知限制（设计如此，勿当 bug 修）
 
-- 无远程搜索 API → `search_memos` 是全量拉取 + 本地过滤
+- 无远程搜索 API → `search_memos` 是全量拉取 + 本地过滤（40 页保护上限，`complete: false` 时告知调用方）
 - `/memo/latest_updated_desc` 服务端 cap 200 条
 - `/tag/updated/` 每页 ~8 条 → `list_tags` 优先 Vuex 直读
 - 写操作走 **V1** 相对路径（V2 `callMemoWrite` 更新会触发 code=-20 乐观锁冲突，实测）
 - 翻页游标必须 unix 秒
+- MCP 无服务端状态 → 翻页游标只编码定位信息（list 编码时间戳，search 编码关键词+偏移），每次调用幂等重算
 
 ### 新增工具的步骤
 
-1. `src/tools.ts`：实现导出函数 + 在 `schemas` 补 zod schema
-2. `src/index.ts`：`server.registerTool(name, { description, inputSchema }, handler)`
+1. `src/tools.ts`：实现导出函数 + 在 `schemas` 补输入 zod schema、在 `outputs` 补输出 zod schema（可缺失字段用 `.nullable()`，勿留 undefined）
+2. `src/index.ts`：`server.registerTool(name, { description, inputSchema, outputSchema }, handler)`
 3. `test-e2e.mjs` 补测试（写操作必须闭环清理）
 4. **更新本文**：总览表 + 详情节 + 变更记录
 
@@ -204,3 +206,4 @@
 |---|---|---|
 | 2026-11-07 | 0.1.0 | 首版：11 工具（whoami/list_memos/search_memos/get_memo/create_memo/update_memo/delete_memo/list_tags/rename_tag/pin_tag/unpin_tag），e2e 全绿，ASAR 注入交付 |
 | 2026-11-08 | 0.1.2 | `list_tags` 重设计为标签树浏览：无参=一级标签、`tag_name`=直接子级、`recursive=true`=全部后代；层级按名字 `/` 前缀本地推导（不再默认返回全量）；中间层无实体时合成虚拟节点（`id: null`），一级视图置顶优先排序 |
+| 2026-11-08 | 0.2.0 | 按 MCP 规范全量整改输出：全部工具声明 `outputSchema` 并返回 `structuredContent`（SDK 强制校验）；可缺失字段统一 `null` 不丢字段；`list_memos` `total`→`count`、坏游标报错；`search_memos` 支持游标翻页（`{kw,offset}` 无状态重扫）并新增 `complete` 截断标记；`update_memo` 移除本地伪造的 `updated_at`；`create_memo` slug 缺失改报错；`whoami` 未登录改 isError；`get_memo` tags 统一字符串数组、纯文本解码 HTML 实体；写工具移除 `ok: true` 冗余字段与参数回显；`list_tags` 行统一含 `total_descendants`；错误文案可行动化（去 `❌` 前缀）；补 zod 显式依赖 |
