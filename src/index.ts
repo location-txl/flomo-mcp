@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { createRequire } from "node:module";
 import * as t from "./tools.js";
 
-const server = new McpServer({ name: "flomo-mcp", version: "0.1.0" });
+// 版本号只维护 package.json 一处，server 元数据与之同步
+const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
+const server = new McpServer({ name: "flomo-mcp", version });
 
 const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 1) }] });
 const fail = (err: unknown) => ({
@@ -46,8 +49,9 @@ server.registerTool("delete_memo", {
 }, async ({ slug }) => ok(await t.deleteMemo(slug)));
 
 server.registerTool("list_tags", {
-  description: "列出全部标签（含 id / 置顶状态 / 更新时间）",
-}, async () => ok(await t.listTags()));
+  description: "浏览标签树：不传参数=一级标签；传 tag_name=其直接子级；加 recursive=true=其下全部后代",
+  inputSchema: { tag_name: t.schemas.tagNameQuery, recursive: t.schemas.recursive },
+}, async ({ tag_name, recursive }) => ok(await t.listTags(tag_name, recursive)));
 
 server.registerTool("rename_tag", {
   description: "重命名标签（层级用 / 分隔，如 开发/Linux）",

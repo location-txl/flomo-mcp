@@ -1,6 +1,6 @@
 {
   "name": "@location-txl/flomo-mcp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "MCP server for flomo notes: reuse the desktop app's login session via CDP to search, write and edit notes",
   "license": "MIT",
   "type": "module",

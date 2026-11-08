@@ -16,8 +16,31 @@ const show = (label, v) => console.log(`✔ ${label}:`, JSON.stringify(v).slice(
 
 // ---- 只读 ----
 show("whoami", await call("whoami"));
-const tags = await call("list_tags");
-show(`list_tags (${tags.total})`, tags.tags.slice(0, 6));
+
+const top = await call("list_tags");
+if (top.scope !== "top") throw new Error(`list_tags 无参应返回 scope=top，实际 ${top.scope}`);
+show(`list_tags 一级 (${top.total})`, top.tags.slice(0, 6));
+
+const branch = top.tags.find((t) => t.total_descendants > 0);
+if (branch) {
+  const children = await call("list_tags", { tag_name: branch.name });
+  if (children.scope !== "children" || children.parent !== branch.name) throw new Error("list_tags 子级返回结构不符");
+  if (children.total !== branch.direct_children) throw new Error(`非递归子数 ${children.total} ≠ 一级视图 direct_children ${branch.direct_children}`);
+  show(`list_tags 子级 ${branch.name} (${children.total})`, children.tags.slice(0, 6));
+  const all = await call("list_tags", { tag_name: branch.name, recursive: true });
+  if (all.total !== branch.total_descendants) throw new Error(`recursive 后代数 ${all.total} ≠ 一级视图 total_descendants ${branch.total_descendants}`);
+  show(`list_tags 全后代 ${branch.name} (${all.total})`, all.tags.slice(0, 6));
+} else {
+  console.log("· list_tags 层级浏览：账号无层级标签，跳过子级用例");
+}
+
+try {
+  await call("list_tags", { tag_name: "__no_such_tag__" });
+  throw new Error("不存在的标签应报错");
+} catch (e) {
+  if (!String(e.message).includes("标签不存在")) throw e;
+  console.log("✔ list_tags 不存在标签正确报错");
+}
 
 const recent = await call("list_memos", { limit: 3 });
 show(`list_memos recent (${recent.total})`, recent.memos);

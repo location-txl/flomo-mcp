@@ -188,9 +188,11 @@ export async function deleteMemo(slug: string) {
   return { ok: true, slug, note: "已移入回收站" };
 }
 
-/** 全量标签：优先 Vuex 内存直读（flomo 已同步全量，含 id），fallback /tag/updated/ */
-export async function listTags() {
-  const fromStore = await evalInPage<{ ok: boolean; total: number; tags?: { id: number; name: string; pinned: boolean; count?: number }[] }>(`(function(){
+type TagBrief = { id: number; name: string; pinned: boolean; count?: number };
+
+/** 全量标签获取：优先 Vuex 内存直读（flomo 已同步全量，含 id），fallback /tag/updated/ */
+async function fetchAllTags(): Promise<{ source: "memory" | "api"; tags: TagBrief[] }> {
+  const fromStore = await evalInPage<{ ok: boolean; total: number; tags?: TagBrief[] }>(`(function(){
     try{
       const s=window.__flomoVuexStore.state;
       const tags=s.tags;
@@ -200,7 +202,7 @@ export async function listTags() {
     }catch(e){return{ok:false}}
   })()`);
   if (fromStore?.ok && fromStore.tags?.length) {
-    return { source: "memory", total: fromStore.total, tags: fromStore.tags };
+    return { source: "memory", tags: fromStore.tags };
   }
   // fallback：API（服务器每页较小，unix 游标循环）
   const all: FlomoTag[] = [];
@@ -222,9 +224,108 @@ export async function listTags() {
   }
   return {
     source: "api",
-    total: all.length,
     tags: all.map((t) => ({ id: t.id, name: t.name, pinned: !!t.pin, count: undefined })),
   };
+}
+
+/** 标签树浏览：不传 tagName 返回一级标签；传 tagName 返回其直接子级（recursive=true 时全部后代）。
+ *  flomo 标签扁平存储，层级只是名字里的 "/" 约定，树结构在本地按前缀推导。 */
+export async function listTags(tagName?: string, recursive = false) {
+  const { source, tags } = await fetchAllTags();
+  const byName = (a: { name: string }, b: { name: string }) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+
+  // 全部节点名 = 实体标签 + 仅作为前缀存在的虚拟中间层（如只建过 #阅读/读书/小说 而无 #阅读/读书）。
+  // 必须按节点去重后统计"每个节点的直接父级"，否则虚拟中间层的子级会漏计
+  const nodes = new Set<string>();
+  for (const t of tags) {
+    const parts = t.name.split("/");
+    for (let i = 1; i <= parts.length; i++) nodes.add(parts.slice(0, i).join("/"));
+  }
+  const directOf = new Map<string, number>();
+  for (const n of nodes) {
+    const i = n.lastIndexOf("/");
+    if (i > 0) {
+      const p = n.slice(0, i);
+      directOf.set(p, (directOf.get(p) ?? 0) + 1);
+    }
+  }
+
+  if (!tagName) {
+    // 一级视图：按第一段聚合。仅作前缀出现的虚拟一级（如只建过 #阅读/读书）没有实体 id，记 null
+    const groups = new Map<string, { id: number | null; pinned: boolean; count: number | undefined; descendants: number }>();
+    for (const t of tags) {
+      const top = t.name.split("/")[0];
+      let g = groups.get(top);
+      if (!g) {
+        g = { id: null, pinned: false, count: undefined, descendants: 0 };
+        groups.set(top, g);
+      }
+      if (t.name === top) {
+        g.id = t.id;
+        g.pinned = t.pinned;
+      } else {
+        g.descendants++;
+      }
+      if (typeof t.count === "number") g.count = (g.count ?? 0) + t.count;
+    }
+    const list = [...groups.entries()].map(([name, g]) => ({
+      name,
+      id: g.id,
+      pinned: g.pinned,
+      count: g.count,
+      direct_children: directOf.get(name) ?? 0,
+      total_descendants: g.descendants,
+    })).sort((a, b) => (a.pinned === b.pinned ? byName(a, b) : a.pinned ? -1 : 1));
+    return { source, scope: "top" as const, total: list.length, tags: list };
+  }
+
+  const parent = tagName.trim().replace(/^\/+|\/+$/g, "");
+  if (!parent) throw new Error("tag_name 不能为空");
+  const prefix = parent + "/";
+  const descendants = tags.filter((t) => t.name.startsWith(prefix));
+  // 既不是任何标签名、也不是任何标签前缀 → 输入有误；叶子标签查子级返回空列表属正常
+  if (!tags.some((t) => t.name === parent) && descendants.length === 0) {
+    throw new Error(`标签不存在：${parent}`);
+  }
+  type Row = { id: number | null; name: string; pinned: boolean; count: number | undefined; direct_children: number };
+  let list: Row[];
+  if (recursive) {
+    // 全部后代只返回实体标签
+    list = descendants.map((t) => ({
+      id: t.id,
+      name: t.name,
+      pinned: t.pinned,
+      count: t.count,
+      direct_children: directOf.get(t.name) ?? 0,
+    }));
+  } else {
+    // 直接子级：实体子级原样返回；中间层无实体的合成虚拟节点（id=null，count 为其下实体合计），
+    // 保证只建过 #阅读/读书/小说 这类账号也能沿树继续下钻
+    const childMap = new Map<string, { id: number | null; pinned: boolean; count: number | undefined }>();
+    for (const t of descendants) {
+      const rest = t.name.slice(prefix.length);
+      const slash = rest.indexOf("/");
+      if (slash === -1) {
+        childMap.set(t.name, { id: t.id, pinned: t.pinned, count: t.count });
+        continue;
+      }
+      const child = parent + "/" + rest.slice(0, slash);
+      let c = childMap.get(child);
+      if (!c) {
+        c = { id: null, pinned: false, count: undefined };
+        childMap.set(child, c);
+      }
+      if (c.id === null && typeof t.count === "number") c.count = (c.count ?? 0) + t.count;
+    }
+    list = [...childMap.entries()].map(([name, c]) => ({
+      id: c.id,
+      name,
+      pinned: c.pinned,
+      count: c.count,
+      direct_children: directOf.get(name) ?? 0,
+    }));
+  }
+  return { source, scope: "children" as const, parent, recursive, total: list.length, tags: list.sort(byName) };
 }
 
 /** 标签重命名：走 /tag/rename 按名字操作（服务器裁决存在性；Vuex 快照可能滞后于新标签） */
@@ -250,4 +351,6 @@ export const schemas = {
   oldName: z.string().describe("当前标签名"),
   newName: z.string().describe("新标签名"),
   tagName: z.string().describe("标签名"),
+  tagNameQuery: z.string().min(1).optional().describe("父标签名，支持任意层级路径（如 阅读 或 阅读/读书）。不传则返回一级标签"),
+  recursive: z.boolean().default(false).describe("传入 tag_name 时：true=返回其下所有层级后代；false=仅直接子级"),
 };

@@ -18,7 +18,7 @@
 | 5 | `create_memo` | 写 | 创建笔记 | `PUT /memo` | `createMemo` |
 | 6 | `update_memo` | 写 | 更新笔记内容（保留元数据） | `GET /memo/<slug>` + `PUT /memo/<slug>` | `updateMemo` |
 | 7 | `delete_memo` | 写 | 删除（移入回收站） | `DELETE /memo/<slug>` | `deleteMemo` |
-| 8 | `list_tags` | 只读 | 全部标签（含 id/置顶/计数） | Vuex `state.tags` 直读；fallback `GET /tag/updated/` | `listTags` |
+| 8 | `list_tags` | 只读 | 标签树浏览：无参=一级；`tag_name`=直接子级；+`recursive`=全部后代 | Vuex `state.tags` 直读；fallback `GET /tag/updated/`；层级按名字 `/` 本地推导 | `listTags` |
 | 9 | `rename_tag` | 写 | 重命名标签 | `POST /tag/rename` | `renameTag` |
 | 10 | `pin_tag` | 写 | 置顶标签 | `POST /tag/pin` | `pinTag` |
 | 11 | `unpin_tag` | 写 | 取消置顶 | `POST /tag/unpin` | `pinTag` |
@@ -121,10 +121,35 @@
 
 ## 8. `list_tags`
 
-无参数。返回：`{ source: "memory" | "api", total, tags: [ { id, name, pinned, count? } ] }`
+按层级浏览标签树（flomo 标签扁平存储，层级只是名字里的 `/` 约定，树在本地按前缀推导）。
 
-- 优先 Vuex `state.tags` 内存直读（毫秒级、全量、含 count）
-- flomo 未完成同步时 fallback `/tag/updated/` 游标翻页（**服务端每页仅 ~8 条**，属已知的窗口限制，此时无 count）
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `tag_name` | string | 否 | 父标签名，支持任意层级路径（如 `阅读` 或 `阅读/读书`）。不传则返回一级标签 |
+| `recursive` | boolean | 否 | 默认 `false`。传入 `tag_name` 时：`true`=其下所有层级后代；`false`=仅直接子级 |
+
+不传参数（一级视图）：
+
+```json
+{ "source": "memory|api", "scope": "top", "total": 3,
+  "tags": [ { "name": "阅读", "id": null, "pinned": false, "count": 12,
+              "direct_children": 2, "total_descendants": 3 } ] }
+```
+
+传 `tag_name`（子级视图）：
+
+```json
+{ "source": "memory|api", "scope": "children", "parent": "阅读", "recursive": false, "total": 2,
+  "tags": [ { "id": 1, "name": "阅读/读书", "pinned": false, "count": 5, "direct_children": 0 },
+            { "id": null, "name": "阅读/杂谈", "pinned": false, "count": 7, "direct_children": 2 } ] }
+```
+
+- 一级 `id`：实体标签有 id；仅作为前缀出现的虚拟一级（只建过 `#阅读/读书` 而从未单独用过 `#阅读`）为 `null`
+- 一级 `count`：分支内所有标签 count 之和（计数合计，可能重复计数；api fallback 路径无此字段）；排序：置顶优先，其余按名字
+- 子级返回完整 name（含路径），`direct_children=0` 即叶子，无需继续下钻
+- 中间层无实体的直接子级会合成虚拟节点（`id: null`，`count` 为其下实体合计，api fallback 无 count），供继续下钻；`recursive=true` 只返回实体标签
+- `tag_name` 既非任何标签名也非任何前缀时报错；叶子标签查子级返回空列表属正常
+- 数据获取：优先 Vuex `state.tags` 内存直读（毫秒级、全量、含 count）；flomo 未完成同步时 fallback `/tag/updated/` 游标翻页（**服务端每页仅 ~8 条**，属已知的窗口限制，此时无 count）
 
 ## 9. `rename_tag`
 
@@ -178,3 +203,4 @@
 | 日期 | 版本 | 变更 |
 |---|---|---|
 | 2026-11-07 | 0.1.0 | 首版：11 工具（whoami/list_memos/search_memos/get_memo/create_memo/update_memo/delete_memo/list_tags/rename_tag/pin_tag/unpin_tag），e2e 全绿，ASAR 注入交付 |
+| 2026-11-08 | 0.1.2 | `list_tags` 重设计为标签树浏览：无参=一级标签、`tag_name`=直接子级、`recursive=true`=全部后代；层级按名字 `/` 前缀本地推导（不再默认返回全量）；中间层无实体时合成虚拟节点（`id: null`），一级视图置顶优先排序 |
