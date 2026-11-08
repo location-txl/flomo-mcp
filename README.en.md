@@ -2,6 +2,7 @@
 
 **English** | [中文](README.md)
 
+[![npm](https://img.shields.io/npm/v/@location-txl/flomo-mcp.svg)](https://www.npmjs.com/package/@location-txl/flomo-mcp)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Node](https://img.shields.io/badge/Node.js-%E2%89%A520-green.svg)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)
