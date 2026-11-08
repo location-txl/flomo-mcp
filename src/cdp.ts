@@ -5,7 +5,7 @@ const exec = promisify(execFile);
 
 export const CDP_PORT = 9222;
 const CDP_HTTP = `http://127.0.0.1:${CDP_PORT}`;
-export const FLOMO_APP = "/Volumes/out/Applications/flomo.app";
+export const FLOMO_APP = process.env.FLOMO_APP_PATH ?? "/Applications/flomo.app";
 
 interface CdpTarget {
   id: string;

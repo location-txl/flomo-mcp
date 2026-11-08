@@ -18,7 +18,6 @@ const show = (label, v) => console.log(`✔ ${label}:`, JSON.stringify(v).slice(
 show("whoami", await call("whoami"));
 const tags = await call("list_tags");
 show(`list_tags (${tags.total})`, tags.tags.slice(0, 6));
-if (tags.total < 100) console.log(`⚠ 标签仅 ${tags.total} 个（Vuex 显示 111），翻页可能不全`);
 
 const recent = await call("list_memos", { limit: 3 });
 show(`list_memos recent (${recent.total})`, recent.memos);
@@ -56,12 +55,6 @@ show("unpin_tag", unpinned);
 
 const deleted = await call("delete_memo", { slug: created.slug });
 show("delete_memo", deleted);
-
-// ---- 清理历史遗留的测试笔记 ----
-for (const old of ["MjY0NTg2Mjgz", "MjY0NTg3Mjgz", "MjY0NTg3Mjkz", "MjY0NTg3NDU3", "MjY0NTg3NTIx"]) {
-  try { await call("delete_memo", { slug: old }); console.log(`✔ 已清理遗留笔记 ${old}`); }
-  catch { /* 不存在则跳过 */ }
-}
 
 console.log("\n=== 全部通过 ===");
 await client.close();

@@ -8,7 +8,7 @@
  * 幂等：重复运行自动跳过已注入的包。flomo 自动更新会覆盖 app.asar，届时重跑本脚本即可。
  * 恢复：cp "<app>/Contents/Resources/app.asar.orig" "<app>/Contents/Resources/app.asar" && 重新签名
  *
- * 用法：node scripts/patch-flomo.mjs [flomo.app 路径，默认 /Volumes/out/Applications/flomo.app]
+ * 用法：node scripts/patch-flomo.mjs [flomo.app 路径，默认 /Applications/flomo.app]
  */
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 const exec = promisify(execFileCb);
-const APP = process.argv[2] ?? "/Volumes/out/Applications/flomo.app";
+const APP = process.argv[2] ?? "/Applications/flomo.app";
 const RESOURCES = path.join(APP, "Contents/Resources");
 const ASAR = path.join(RESOURCES, "app.asar");
 const BACKUP = ASAR + ".orig";
