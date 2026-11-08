@@ -43,9 +43,17 @@ All 11 tools (5 read-only / 6 write) with parameters and return shapes are docum
 ### Prerequisites
 
 - macOS + a signed-in flomo desktop client (default path `/Applications/flomo.app`)
-- Node.js ≥ 20 (uses the native WebSocket; no puppeteer or external browser needed)
+- Node.js ≥ 22.4 (uses the native WebSocket; no puppeteer or external browser needed)
 
 ### Install
+
+Published on npm — run directly with npx, no clone needed:
+
+```bash
+npx @location-txl/flomo-mcp
+```
+
+Run from source (for developers):
 
 ```bash
 git clone https://github.com/location-txl/flomo-mcp.git ~/flomo-mcp
@@ -60,8 +68,8 @@ npm run build
 {
   "mcpServers": {
     "flomo": {
-      "command": "node",
-      "args": ["~/flomo-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@location-txl/flomo-mcp"]
     }
   }
 }
@@ -73,13 +81,15 @@ If flomo is installed elsewhere, specify it via an environment variable:
 {
   "mcpServers": {
     "flomo": {
-      "command": "node",
-      "args": ["~/flomo-mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "@location-txl/flomo-mcp"],
       "env": { "FLOMO_APP_PATH": "/your/path/flomo.app" }
     }
   }
 }
 ```
+
+When running from source, replace `command` / `args` with `"node"` / `["~/flomo-mcp/dist/index.js"]`.
 
 After restarting the client, ask the AI:
 
@@ -92,7 +102,10 @@ Getting back your account (email masked), note count, and tag count means it wor
 The MCP server has an auto-launch fallback, so patching is optional. Once patched, double-clicking flomo opens it with the debug port — no restart wait on the first tool call:
 
 ```bash
-npm run patch-flomo          # defaults to /Applications/flomo.app
+npx -p @location-txl/flomo-mcp flomo-mcp-patch   # defaults to /Applications/flomo.app
+npx -p @location-txl/flomo-mcp flomo-mcp-patch -- /your/path/flomo.app
+
+# or from a source checkout
 npm run patch-flomo -- /your/path/flomo.app
 ```
 

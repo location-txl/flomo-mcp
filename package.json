@@ -1,18 +1,46 @@
 {
-  "name": "flomo-mcp",
-  "version": "0.1.0",
-  "description": "flomo MCP server：通过 CDP 复用本机 flomo 客户端登录态，查询/编辑笔记与标签",
+  "name": "@location-txl/flomo-mcp",
+  "version": "0.1.1",
+  "description": "MCP server for flomo notes: reuse the desktop app's login session via CDP to search, write and edit notes",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "flomo-mcp": "dist/index.js"
+    "flomo-mcp": "dist/index.js",
+    "flomo-mcp-patch": "scripts/patch-flomo.mjs"
   },
+  "files": [
+    "dist",
+    "scripts",
+    "AGENT.md",
+    "TOOLS.md",
+    "README.en.md"
+  ],
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "patch-flomo": "node scripts/patch-flomo.mjs"
+    "patch-flomo": "node scripts/patch-flomo.mjs",
+    "prepublishOnly": "npm run build"
   },
+  "keywords": [
+    "flomo",
+    "mcp",
+    "notes",
+    "model-context-protocol",
+    "ai",
+    "claude"
+  ],
+  "engines": {
+    "node": ">=22.4.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/location-txl/flomo-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/location-txl/flomo-mcp/issues"
+  },
+  "homepage": "https://github.com/location-txl/flomo-mcp#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0"
   },

@@ -43,9 +43,17 @@ AI 客户端 ──stdio──▶ flomo-mcp ──CDP(127.0.0.1:9222)──▶ f
 ### 环境要求
 
 - macOS + 已登录的 flomo 桌面客户端（默认路径 `/Applications/flomo.app`）
-- Node.js ≥ 20（依赖原生 WebSocket，无需 puppeteer 等外部浏览器）
+- Node.js ≥ 22.4（依赖原生 WebSocket，无需 puppeteer 等外部浏览器）
 
 ### 安装
+
+已发布到 npm，推荐用 npx 直接运行，无需 clone：
+
+```bash
+npx @location-txl/flomo-mcp
+```
+
+从源码运行（面向开发者）：
 
 ```bash
 git clone https://github.com/location-txl/flomo-mcp.git ~/flomo-mcp
@@ -60,8 +68,8 @@ npm run build
 {
   "mcpServers": {
     "flomo": {
-      "command": "node",
-      "args": ["~/flomo-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@location-txl/flomo-mcp"]
     }
   }
 }
@@ -73,13 +81,15 @@ flomo 不装在默认路径时，通过环境变量指定：
 {
   "mcpServers": {
     "flomo": {
-      "command": "node",
-      "args": ["~/flomo-mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "@location-txl/flomo-mcp"],
       "env": { "FLOMO_APP_PATH": "/你的路径/flomo.app" }
     }
   }
 }
 ```
+
+从源码运行时，`command` / `args` 换成 `"node"` / `["~/flomo-mcp/dist/index.js"]`。
 
 重启客户端后，对 AI 说：
 
@@ -92,7 +102,10 @@ flomo 不装在默认路径时，通过环境变量指定：
 MCP 自带兜底拉起逻辑，不注入也能用；注入后双击 flomo 图标即带调试口，省去首次调用自动重启的等待：
 
 ```bash
-npm run patch-flomo          # 默认 /Applications/flomo.app
+npx -p @location-txl/flomo-mcp flomo-mcp-patch   # 默认 /Applications/flomo.app
+npx -p @location-txl/flomo-mcp flomo-mcp-patch -- /你的路径/flomo.app
+
+# 或源码目录内
 npm run patch-flomo -- /你的路径/flomo.app
 ```
 
