@@ -12,7 +12,7 @@
 | # | 工具 | 类别 | 一句话 | 底层 | 实现 |
 |---|---|---|---|---|---|
 | 1 | `whoami` | 只读 | 验证连接：账号/笔记数/标签数 | Vuex + localStorage 直读（无网络请求） | `whoami` |
-| 2 | `list_memos` | 只读 | 列笔记：recent 最近 200 条 / all 全量翻页 | `GET /memo/latest_updated_desc`、`GET /memo/updated/` | `listMemos` |
+| 2 | `list_memos` | 只读 | 列笔记：recent 最近 200 条 / all 全量翻页 / tag 按标签过滤（含子标签） | `GET /memo/latest_updated_desc`、`GET /memo/updated/`（tag 为全量扫描+本地过滤） | `listMemos` |
 | 3 | `search_memos` | 只读 | 关键词搜正文与标签（支持游标翻页） | `GET /memo/updated/` 全量翻页 + 本地过滤 | `searchMemos` |
 | 4 | `get_memo` | 只读 | 单条笔记全文（HTML + 纯文本） | `GET /memo/<slug>` | `getMemo` |
 | 5 | `create_memo` | 写 | 创建笔记 | `PUT /memo` | `createMemo` |
@@ -67,14 +67,18 @@
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `limit` | int 1–200 | 否 | 20 | 返回条数（all 模式每页最多 100 条，超出按 100 执行） |
-| `mode` | `"recent"` \| `"all"` | 否 | `recent` | recent=最近更新（最新在前，服务端上限 200 条）；all=全量按更新时间升序游标翻页 |
-| `cursor` | string | 否 | — | 翻页游标，传上次返回的 `next_cursor`（仅 mode=all） |
+| `mode` | `"recent"` \| `"all"` | 否 | `recent` | recent=最近更新（最新在前，服务端上限 200 条）；all=全量按更新时间升序游标翻页。传 `tag` 时忽略 |
+| `tag` | string | 否 | — | 按标签过滤：**前缀匹配含子标签**（查 `阅读` 也返回 `阅读/读书` 下的笔记）。传此参数时忽略 `mode`，全量扫描后本地过滤，按更新时间降序游标翻页 |
+| `cursor` | string | 否 | — | 翻页游标，传上次返回的 `next_cursor`（mode=all 或 tag 过滤时使用；后者翻页须保持 `tag` 不变） |
 
-返回：`{ mode, count, next_cursor?, memos: [ { slug, created_at, updated_at|null, tags[], excerpt } ] }`
+**未传 tag** 返回：`{ mode, count, next_cursor?, memos: [ { slug, created_at, updated_at|null, tags[], excerpt } ] }`
+
+**传 tag** 返回：`{ tag, complete, scanned, matched, count, next_cursor?, memos[…] }`（无 `mode` 字段，memos 结构同上）
 
 - `excerpt` 为去 HTML 标签（已解码实体）后的前 200 字符；翻页到尾页时无 `next_cursor`
-- 游标无效时报错"请从第一页重新开始（不传 cursor 参数）"
+- 游标无效或与当次 `tag` 不匹配时报错"请从第一页重新开始"
 - recent 用 `/memo/latest_updated_desc`（服务端 cap 200）；all 用 `/memo/updated/`（每页 ≤100）
+- tag 过滤：flomo 无按标签查询的 API（应用内点标签也是本地过滤），本工具全量拉取 `/memo/updated/` 后按 memo 自带 `tags` 字段前缀匹配，与 `search_memos` 同一套全量扫描+offset 游标机制（`complete`/`scanned` 语义相同）
 
 ## 3. `search_memos`
 
@@ -225,3 +229,4 @@
 | 2026-11-08 | 0.1.2 | `list_tags` 重设计为标签树浏览：无参=一级标签、`tag_name`=直接子级、`recursive=true`=全部后代；层级按名字 `/` 前缀本地推导（不再默认返回全量）；中间层无实体时合成虚拟节点（`id: null`），一级视图置顶优先排序 |
 | 2026-11-08 | 0.2.0 | 按 MCP 规范全量整改输出：全部工具声明 `outputSchema` 并返回 `structuredContent`（SDK 强制校验）；可缺失字段统一 `null` 不丢字段；`list_memos` `total`→`count`、坏游标报错；`search_memos` 支持游标翻页（`{kw,offset}` 无状态重扫）并新增 `complete` 截断标记；`update_memo` 移除本地伪造的 `updated_at`；`create_memo` slug 缺失改报错；`whoami` 未登录改 isError；`get_memo` tags 统一字符串数组、纯文本解码 HTML 实体；写工具移除 `ok: true` 冗余字段与参数回显；`list_tags` 行统一含 `total_descendants`；错误文案可行动化（去 `❌` 前缀）；补 zod 显式依赖 |
 | 2026-11-08 | 未发布 | 新增第 12 个工具 `sync`：手动同步（等同点击 flomo 同步按钮），页面内直调 LocalDB `syncWithPromise()`（webpackChunk 注入捕获 require，模块 id 漂移时按签名扫描兜底），返回 pull/push 统计；同步进行中返回 `SYNCING` 不报错 |
+| 2026-11-08 | 未发布 | `list_memos` 新增 `tag` 参数：按标签过滤列出该标签下笔记（前缀匹配含子标签，与 `list_tags` 后代计数同口径），传 `tag` 时忽略 `mode`，全量扫描本地过滤后按更新时间降序游标翻页（`{tag,offset}` 游标，返回结构对齐 `search_memos`） |

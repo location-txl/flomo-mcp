@@ -111,6 +111,18 @@ function decodeSearchCursor(s: string): SearchCursor | null {
   } catch { return null; }
 }
 
+interface TagCursor { tag: string; offset: number }
+
+function encodeTagCursor(c: TagCursor): string {
+  return Buffer.from(JSON.stringify(c), "utf8").toString("base64url");
+}
+function decodeTagCursor(s: string): TagCursor | null {
+  try {
+    const c = JSON.parse(Buffer.from(s, "base64url").toString("utf8"));
+    return typeof c?.tag === "string" && typeof c?.offset === "number" ? c : null;
+  } catch { return null; }
+}
+
 /** 全量拉取笔记（升序 unix 游标翻页），最多 40 页保护。返回是否打满上限 */
 async function scanAllMemos(): Promise<{ memos: FlomoMemo[]; truncated: boolean }> {
   const all: FlomoMemo[] = [];
@@ -132,9 +144,39 @@ async function scanAllMemos(): Promise<{ memos: FlomoMemo[]; truncated: boolean 
 
 /**
  * 列出笔记。mode=recent：最近更新（服务端 cap 200 条，最新在前）；
- * mode=all：全量按更新时间升序翻页（游标，每页最多 100 条）。
+ * mode=all：全量按更新时间升序翻页（游标，每页最多 100 条）；
+ * 传 tag：忽略 mode，全量扫描后按标签前缀匹配过滤（含子标签），更新时间降序翻页。
  */
-export async function listMemos(limit: number, mode: "recent" | "all", cursor?: string) {
+export async function listMemos(limit: number, mode: "recent" | "all", cursor?: string, tag?: string) {
+  if (tag !== undefined) {
+    const clean = tag.replace(/^#/, "").trim();
+    if (!clean) throw new Error("tag 不能为空");
+    let offset = 0;
+    if (cursor !== undefined) {
+      const c = decodeTagCursor(cursor);
+      if (!c) throw new Error("翻页游标无效，请从第一页重新开始（不传 cursor 参数）");
+      if (c.tag !== clean) throw new Error("翻页游标与 tag 不匹配，请从第一页重新开始");
+      offset = c.offset;
+    }
+    const { memos: all, truncated } = await scanAllMemos();
+    const hits = all
+      .filter((m) => tagNames(m.tags).some((n) => n === clean || n.startsWith(clean + "/")))
+      .sort((a, b) => String(b.updated_at ?? b.created_at).localeCompare(String(a.updated_at ?? a.created_at)));
+
+    const page = hits.slice(offset, offset + limit);
+    const next = offset + limit < hits.length
+      ? { next_cursor: encodeTagCursor({ tag: clean, offset: offset + limit }) }
+      : {};
+    return {
+      tag: clean,
+      complete: !truncated,
+      scanned: all.length,
+      matched: hits.length,
+      count: page.length,
+      ...next,
+      memos: page.map((m) => memoBrief(m)),
+    };
+  }
   if (mode === "recent") {
     const memos = await callApi<FlomoMemo[]>("GET", "/memo/latest_updated_desc", { limit: 200, tz: tzStr() });
     const arr = (Array.isArray(memos) ? memos : []).slice(0, limit);
@@ -481,8 +523,9 @@ const tagRowShape = {
 
 export const schemas = {
   limit: z.number().int().min(1).max(200).default(20).describe("返回条数（mode=all 时每页最多 100 条，超出按 100 执行）"),
-  mode: z.enum(["recent", "all"]).default("recent").describe("recent=最近更新(最新在前，最多200条)；all=全量按时间升序翻页(每页≤100)"),
-  cursor: z.string().optional().describe("翻页游标（上次返回的 next_cursor，仅 mode=all）"),
+  mode: z.enum(["recent", "all"]).default("recent").describe("recent=最近更新(最新在前，最多200条)；all=全量按时间升序翻页(每页≤100)。传 tag 时忽略"),
+  cursor: z.string().optional().describe("翻页游标（上次返回的 next_cursor；mode=all 或传 tag 时使用，后者翻页须保持 tag 不变）"),
+  tagFilter: z.string().min(1).optional().describe("按标签过滤（前缀匹配含子标签，如 阅读 也含 阅读/读书）。传此参数时忽略 mode，全量扫描后本地过滤，按更新时间降序游标翻页"),
   searchCursor: z.string().optional().describe("翻页游标（上次返回的 next_cursor，必须配合首次搜索的同一 keyword）"),
   keyword: z.string().min(1).describe("搜索关键词（匹配正文与标签，大小写不敏感）"),
   slug: z.string().describe("笔记 slug"),
@@ -503,7 +546,11 @@ export const outputs = {
     pro: z.boolean(),
   },
   listMemos: {
-    mode: z.enum(["recent", "all"]),
+    mode: z.enum(["recent", "all"]).optional().describe("本次使用的模式；传 tag 过滤时不返回"),
+    tag: z.string().optional().describe("本次过滤的标签（已去除 # 前缀）；存在即本次为 tag 过滤结果"),
+    complete: z.boolean().optional().describe("tag 过滤：false=触达 40 页扫描上限，结果可能不全"),
+    scanned: z.number().int().optional().describe("tag 过滤：本次实际扫描笔记数"),
+    matched: z.number().int().optional().describe("tag 过滤：匹配总数"),
     count: z.number().int().describe("本次返回条数（非全量总数）"),
     next_cursor: z.string().optional().describe("存在即还有下一页，原样传入下次调用"),
     memos: z.array(z.object(memoBriefShape)),

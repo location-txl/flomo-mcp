@@ -102,6 +102,35 @@ show(`search_memos p2`, s2.memos);
 
 await expectError("search_memos", { keyword: "另一个词", limit: 1, cursor: s1.next_cursor }, "不匹配");
 
+// ---- list_memos tag 过滤：父子两条种子验证前缀匹配与翻页 ----
+const TAGP = "__mcp_taglist_test";
+const seedTag1 = await call("create_memo", { content: `#${TAGP} tag 过滤父种子` });
+const seedTag2 = await call("create_memo", { content: `#${TAGP}/sub tag 过滤子种子` });
+show("create_memo tag 过滤种子", [seedTag1.slug, seedTag2.slug]);
+
+const byParent = await call("list_memos", { tag: TAGP });
+if (byParent.tag !== TAGP || byParent.complete !== true || "mode" in byParent) throw new Error(`tag 过滤返回结构不符: ${JSON.stringify({ ...byParent, memos: [] })}`);
+if (byParent.matched < 2) throw new Error(`父标签应至少命中 2 条（含子标签），实际 ${byParent.matched}`);
+const slugs = byParent.memos.map((m) => m.slug);
+if (!slugs.includes(seedTag1.slug) || !slugs.includes(seedTag2.slug)) throw new Error("父标签结果应同时包含父/子两条种子");
+show(`list_memos tag=${TAGP} (${byParent.matched}/${byParent.scanned})`, byParent.memos.map((m) => `${m.slug}:${m.tags.join(",")}`));
+
+const byChild = await call("list_memos", { tag: `${TAGP}/sub` });
+const childSlugs = byChild.memos.map((m) => m.slug);
+if (!childSlugs.includes(seedTag2.slug) || childSlugs.includes(seedTag1.slug)) throw new Error("子标签应只命中子种子");
+show(`list_memos tag=${TAGP}/sub (${byChild.matched})`, byChild.memos.map((m) => m.slug));
+
+const t1 = await call("list_memos", { tag: TAGP, limit: 1 });
+if (t1.count !== 1 || !t1.next_cursor) throw new Error("tag 过滤 limit=1 应返回 1 条且带 next_cursor");
+const t2 = await call("list_memos", { tag: TAGP, limit: 1, cursor: t1.next_cursor });
+if (t2.memos.some((m) => m.slug === t1.memos[0].slug)) throw new Error("tag 过滤翻页出现重复");
+show("list_memos tag 翻页", t2.memos.map((m) => m.slug));
+
+await expectError("list_memos", { tag: "__no_such_tag__", cursor: t1.next_cursor }, "不匹配");
+const none = await call("list_memos", { tag: "__no_such_tag__" });
+if (none.matched !== 0 || none.count !== 0 || none.next_cursor) throw new Error(`不存在的标签应返回空集，实际 ${JSON.stringify({ ...none, memos: [] })}`);
+console.log("✔ list_memos 不存在的标签返回空集");
+
 // ---- 写闭环 ----
 const created = await call("create_memo", { content: "#__mcp_test flomo-mcp 创建测试 v2 <b>hello</b> &amp; more" });
 show("create_memo", created);
@@ -125,7 +154,7 @@ show("pin_tag", pinned);
 const unpinned = await call("unpin_tag", { tag: "__mcp_renamed" });
 show("unpin_tag", unpinned);
 
-for (const s of [created, seed1, seed2]) {
+for (const s of [created, seed1, seed2, seedTag1, seedTag2]) {
   const deleted = await call("delete_memo", { slug: s.slug });
   show("delete_memo", deleted);
 }

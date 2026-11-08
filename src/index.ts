@@ -25,10 +25,10 @@ server.registerTool("whoami", {
 }, async () => ok(await t.whoami()));
 
 server.registerTool("list_memos", {
-  description: "列出笔记。mode=recent 最近更新（最新在前，最多200条）；mode=all 全量按时间升序游标翻页（每页最多100条）",
-  inputSchema: { limit: t.schemas.limit, mode: t.schemas.mode, cursor: t.schemas.cursor },
+  description: "列出笔记。mode=recent 最近更新（最新在前，最多200条）；mode=all 全量按时间升序游标翻页（每页最多100条）；传 tag 按标签过滤（前缀匹配含子标签，如 阅读 也含 阅读/读书，全量扫描后按更新时间降序翻页，忽略 mode）",
+  inputSchema: { limit: t.schemas.limit, mode: t.schemas.mode, cursor: t.schemas.cursor, tag: t.schemas.tagFilter },
   outputSchema: t.outputs.listMemos,
-}, async ({ limit, mode, cursor }) => ok(await t.listMemos(limit, mode, cursor)));
+}, async ({ limit, mode, cursor, tag }) => ok(await t.listMemos(limit, mode, cursor, tag)));
 
 server.registerTool("search_memos", {
   description: "按关键词搜索笔记（匹配正文与标签，大小写不敏感，结果按更新时间降序）。flomo 无远程搜索接口，每次调用全量拉取后本地过滤；翻页时传 next_cursor 且 keyword 保持不变",
