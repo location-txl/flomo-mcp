@@ -4,7 +4,7 @@
 > 面向使用者的说明见 [README.md](README.md)。
 
 - server 名称：`flomo-mcp`（stdio）
-- 工具总数：**11**（只读 5 / 写 6）
+- 工具总数：**12**（只读 5 / 写 7）
 - 文中「实现」列对应 `src/tools.ts` 的导出函数；注册处为 `src/index.ts`。
 
 ## 总览
@@ -18,10 +18,11 @@
 | 5 | `create_memo` | 写 | 创建笔记 | `PUT /memo` | `createMemo` |
 | 6 | `update_memo` | 写 | 更新笔记内容（保留元数据） | `GET /memo/<slug>` + `PUT /memo/<slug>` | `updateMemo` |
 | 7 | `delete_memo` | 写 | 删除（移入回收站） | `DELETE /memo/<slug>` | `deleteMemo` |
-| 8 | `list_tags` | 只读 | 标签树浏览：无参=一级；`tag_name`=直接子级；+`recursive`=全部后代 | Vuex `state.tags` 直读；fallback `GET /tag/updated/`；层级按名字 `/` 本地推导 | `listTags` |
-| 9 | `rename_tag` | 写 | 重命名标签 | `POST /tag/rename` | `renameTag` |
-| 10 | `pin_tag` | 写 | 置顶标签 | `POST /tag/pin` | `pinTag` |
-| 11 | `unpin_tag` | 写 | 取消置顶标签 | `POST /tag/unpin` | `pinTag` |
+| 8 | `sync` | 写 | 手动同步（等同点击同步按钮），返回统计 | 页面内 LocalDB 类 `syncWithPromise()`（pull+push） | `sync` |
+| 9 | `list_tags` | 只读 | 标签树浏览：无参=一级；`tag_name`=直接子级；+`recursive`=全部后代 | Vuex `state.tags` 直读；fallback `GET /tag/updated/`；层级按名字 `/` 本地推导 | `listTags` |
+| 10 | `rename_tag` | 写 | 重命名标签 | `POST /tag/rename` | `renameTag` |
+| 11 | `pin_tag` | 写 | 置顶标签 | `POST /tag/pin` | `pinTag` |
+| 12 | `unpin_tag` | 写 | 取消置顶标签 | `POST /tag/unpin` | `pinTag` |
 
 ## 通用约定
 
@@ -127,7 +128,22 @@
 
 返回：`{ slug, note: "已移入回收站" }`。可在 flomo 回收站恢复。
 
-## 8. `list_tags`
+## 8. `sync`
+
+手动触发同步，无参数，等同点击 flomo 界面左下角的同步按钮：先 pull（拉服务端最新笔记/标签进本地 IndexedDB），成功后 push（推送本地待同步修改到服务端），并返回同步统计。
+
+```json
+{ "synced": true, "code": "SUCCESS", "message": "同步完成",
+  "duration_ms": 1001, "pull_success": true, "push_success": true,
+  "updated_memo_count": 12, "tag_updated": 0 }
+```
+
+- 已有同步在进行中时**不报错**，返回 `{ synced: false, code: "SYNCING", …null }`，稍后重试即可
+- pull/push 失败时 `isError`（code 为 `PULL_ERROR` / `PUSH_ERROR`），错误文案含失败原因（多为网络问题）
+- `updated_memo_count` / `tag_updated` 为 flomo 同步引擎统计的本次更新数；UI 侧会在同步完成后清零，读取的是完成瞬间的值
+- 实现：不走 `$api`，而是页面内调用 webpack 打包的 LocalDB 类（主包模块 77142，导出名 `Ay`）的 `syncWithPromise()`——与同步按钮同一入口。通过 `webpackChunkflomo.push` 注入捕获 webpack require；flomo 更新导致模块 id 漂移时按 `syncWithPromise` 签名扫描已加载模块兜底。副作用与按钮一致：同步完成后 flomo 自身会刷新 Vuex 中的标签/统计（`list_tags` 的内存快路径随之更新）
+
+## 9. `list_tags`
 
 按层级浏览标签树（flomo 标签扁平存储，层级只是名字里的 `/` 约定，树在本地按前缀推导）。
 
@@ -152,7 +168,7 @@
 - 一级视图排序：置顶优先，其余按名字
 - 数据获取：优先 Vuex `state.tags` 内存直读（毫秒级、全量、含 count）；flomo 未完成同步时 fallback `/tag/updated/` 游标翻页（**服务端每页仅 ~8 条**，属已知的窗口限制，此时无 count）
 
-## 9. `rename_tag`
+## 10. `rename_tag`
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
@@ -163,7 +179,7 @@
 
 按**名字**调 `/tag/rename`，存在性由服务器裁决（不依赖 Vuex 快照——新建标签在 Vuex 里可能滞后）。
 
-## 10/11. `pin_tag` / `unpin_tag`
+## 11/12. `pin_tag` / `unpin_tag`
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
@@ -183,6 +199,7 @@
    - `window.__flomoVuexStore` 是否存在
    - `window.__flomoVuexStore._vm.$api` 及 `callPromise` 是否可调用
 4. 若 `$api` 没了，需重新逆向：签名算法为 `md5(参数按 key 排序拼 k=v& + salt "dbbc3dd73364b4084c3a69346e0ce2b2")`
+5. 若仅 `sync` 失效：webpack 模块 id 漂移属预期（有按 `syncWithPromise` 签名扫描已加载模块的兜底）；兜底也失败说明导出名变了，在主包 `index.*.js` 搜 `syncWithPromise` 重新定位模块
 
 ### 已知限制（设计如此，勿当 bug 修）
 
@@ -207,3 +224,4 @@
 | 2026-11-07 | 0.1.0 | 首版：11 工具（whoami/list_memos/search_memos/get_memo/create_memo/update_memo/delete_memo/list_tags/rename_tag/pin_tag/unpin_tag），e2e 全绿，ASAR 注入交付 |
 | 2026-11-08 | 0.1.2 | `list_tags` 重设计为标签树浏览：无参=一级标签、`tag_name`=直接子级、`recursive=true`=全部后代；层级按名字 `/` 前缀本地推导（不再默认返回全量）；中间层无实体时合成虚拟节点（`id: null`），一级视图置顶优先排序 |
 | 2026-11-08 | 0.2.0 | 按 MCP 规范全量整改输出：全部工具声明 `outputSchema` 并返回 `structuredContent`（SDK 强制校验）；可缺失字段统一 `null` 不丢字段；`list_memos` `total`→`count`、坏游标报错；`search_memos` 支持游标翻页（`{kw,offset}` 无状态重扫）并新增 `complete` 截断标记；`update_memo` 移除本地伪造的 `updated_at`；`create_memo` slug 缺失改报错；`whoami` 未登录改 isError；`get_memo` tags 统一字符串数组、纯文本解码 HTML 实体；写工具移除 `ok: true` 冗余字段与参数回显；`list_tags` 行统一含 `total_descendants`；错误文案可行动化（去 `❌` 前缀）；补 zod 显式依赖 |
+| 2026-11-08 | 未发布 | 新增第 12 个工具 `sync`：手动同步（等同点击 flomo 同步按钮），页面内直调 LocalDB `syncWithPromise()`（webpackChunk 注入捕获 require，模块 id 漂移时按签名扫描兜底），返回 pull/push 统计；同步进行中返回 `SYNCING` 不报错 |

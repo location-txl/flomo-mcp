@@ -249,6 +249,64 @@ export async function deleteMemo(slug: string) {
   return { slug, note: "已移入回收站" };
 }
 
+interface SyncResult {
+  ok: boolean;
+  message?: string;
+  result?: {
+    success: boolean;
+    code: string;
+    message?: string;
+    data?: {
+      duration?: number;
+      pullSuccess?: boolean;
+      pushSuccess?: boolean;
+      updatedMemoCount?: number;
+      tagUpdated?: number;
+    };
+  };
+}
+
+/**
+ * 手动同步（等同点击 flomo 界面左下角同步按钮）。
+ * 通过 webpackChunkflomo 注入捕获 require，取 LocalDB 类（当前主包模块 77142，
+ * 导出名 Ay）调 syncWithPromise()：pull 拉服务端最新数据入本地 IndexedDB，push 推本地待同步修改。
+ * 失败时 syncWithPromise 以结果对象 reject，页面侧 catch 后原样带回。
+ */
+export async function sync() {
+  const r = await evalInPage<SyncResult>(`(async function(){
+    let req=null;
+    try{window.webpackChunkflomo.push([[Math.floor(Math.random()*1e9)+1e6],{},function(r){req=r;}]);}catch(e){}
+    if(!req)return{ok:false,message:"webpack require 捕获失败"};
+    let cls=null;
+    try{const m=req(77142);cls=m&&m.Ay;}catch(e){}
+    if(!cls||typeof cls.syncWithPromise!=="function"){
+      // 模块 id 随 flomo 更新会漂移，按签名扫描已加载模块兜底
+      for(const k in req.c){try{const m=req.c[k]&&req.c[k].exports;
+        if(m&&m.Ay&&typeof m.Ay.syncWithPromise==="function"){cls=m.Ay;break;}}catch(e){}}
+    }
+    if(!cls)return{ok:false,message:"未找到同步模块（flomo 前端已更新）"};
+    return{ok:true,result:await cls.syncWithPromise().catch(e=>e)};
+  })()`, 120000);
+  if (!r?.ok || !r.result || typeof r.result.success !== "boolean") {
+    throw new Error(`${r?.message ?? "同步调用异常"}：请重启 flomo 后重试；若持续失败请到 GitHub 提 issue`);
+  }
+  const res = r.result;
+  if (!res.success && res.code !== "SYNCING") {
+    throw new Error(`同步失败（${res.code}）：${res.message ?? "未知原因"}。请检查网络后重试`);
+  }
+  const d = res.data ?? {};
+  return {
+    synced: res.success,
+    code: res.code as "SUCCESS" | "SYNCING",
+    message: res.message ?? "",
+    duration_ms: typeof d.duration === "number" ? d.duration : null,
+    pull_success: d.pullSuccess ?? null,
+    push_success: d.pushSuccess ?? null,
+    updated_memo_count: d.updatedMemoCount ?? null,
+    tag_updated: d.tagUpdated ?? null,
+  };
+}
+
 type TagBrief = { id: number; name: string; pinned: boolean; count?: number };
 
 /** 全量标签获取：优先 Vuex 内存直读（flomo 已同步全量，含 id），fallback /tag/updated/ */
@@ -469,6 +527,16 @@ export const outputs = {
   createMemo: { slug: z.string() },
   updateMemo: { slug: z.string() },
   deleteMemo: { slug: z.string(), note: z.string().describe("已移入回收站，可在 flomo 回收站恢复") },
+  sync: {
+    synced: z.boolean().describe("true=本次调用完成一次同步；false=已有同步在进行中（code=SYNCING）"),
+    code: z.enum(["SUCCESS", "SYNCING"]),
+    message: z.string().describe("flomo 返回的同步结果消息"),
+    duration_ms: z.number().int().nullable().describe("同步耗时（毫秒）；SYNCING 时为 null"),
+    pull_success: z.boolean().nullable().describe("拉取服务端数据是否成功；SYNCING 时为 null"),
+    push_success: z.boolean().nullable().describe("推送本地待同步修改是否成功；SYNCING 时为 null"),
+    updated_memo_count: z.number().int().nullable().describe("本次同步更新的笔记数"),
+    tag_updated: z.number().int().nullable().describe("本次同步更新的标签数"),
+  },
   listTags: {
     count: z.number().int().describe("本次返回的标签节点数"),
     tags: z.array(z.object(tagRowShape)),

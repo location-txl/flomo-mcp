@@ -36,6 +36,16 @@ if (!me.account || !("memo_count" in me) || !("tag_count" in me) || typeof me.pr
 }
 show("whoami", me);
 
+// ---- 手动同步（幂等，等同点击同步按钮；顺手刷新 Vuex 供后续标签用例读到新数据）----
+const synced = await call("sync");
+if (typeof synced.synced !== "boolean" || !["SUCCESS", "SYNCING"].includes(synced.code)) {
+  throw new Error(`sync 结构不符: ${JSON.stringify(synced)}`);
+}
+if (synced.code === "SUCCESS" && (synced.pull_success !== true || synced.push_success !== true)) {
+  throw new Error(`sync 成功时 pull/push 应为 true: ${JSON.stringify(synced)}`);
+}
+show("sync", synced);
+
 const top = await call("list_tags");
 if (!Array.isArray(top.tags) || typeof top.count !== "number") throw new Error("list_tags 一级返回结构不符");
 show(`list_tags 一级 (${top.count})`, top.tags.slice(0, 6));

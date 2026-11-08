@@ -37,7 +37,7 @@ AI 客户端 ──stdio──▶ flomo-mcp ──CDP(127.0.0.1:9222)──▶ f
 | "我有哪些标签？把『读书』置顶" | `list_tags` + `pin_tag` |
 | "把标签 读书 改成 阅读/读书" | `rename_tag` |
 
-全部 11 个工具（5 只读 / 6 写）的参数与返回结构见 **[TOOLS.md](TOOLS.md)**。
+全部 12 个工具（5 只读 / 7 写）的参数与返回结构见 **[TOOLS.md](TOOLS.md)**。
 
 ## 使用
 
@@ -142,7 +142,7 @@ codesign --force --deep --sign - "/Applications/flomo.app"
 
 ```bash
 npm run build          # tsc 编译到 dist/（改代码后必跑）
-node test-e2e.mjs      # 11 个工具全链路测试
+node test-e2e.mjs      # 12 个工具全链路测试
 npm run patch-flomo    # ASAR 注入（可选）
 ```
 
@@ -154,7 +154,7 @@ e2e 测试连接的是**真实 flomo 账号**：写操作走 create→update→r
 
 ```
 src/
-├── index.ts   # stdio MCP server 入口 + 11 个工具注册
+├── index.ts   # stdio MCP server 入口 + 12 个工具注册
 ├── cdp.ts     # CDP 客户端：探测/兜底拉起 flomo、页面上下文执行
 ├── api.ts     # 复用页面 $api 的调用层 + flomo 时间/时区格式工具
 └── tools.ts   # 工具实现与参数 schema

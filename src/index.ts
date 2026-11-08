@@ -60,6 +60,11 @@ server.registerTool("delete_memo", {
   outputSchema: t.outputs.deleteMemo,
 }, async ({ slug }) => ok(await t.deleteMemo(slug)));
 
+server.registerTool("sync", {
+  description: "手动触发同步（等同点击 flomo 界面左下角同步按钮）：拉取服务端最新笔记/标签到本地并推送本地待同步修改，返回同步统计。已有同步在进行中时返回 code=SYNCING",
+  outputSchema: t.outputs.sync,
+}, async () => ok(await t.sync()));
+
 server.registerTool("list_tags", {
   description: "浏览标签树：不传参数=一级标签；传 tag_name=其直接子级；加 recursive=true=其下全部后代。count 为 null 表示计数不可用",
   inputSchema: { tag_name: t.schemas.tagNameQuery, recursive: t.schemas.recursive },
