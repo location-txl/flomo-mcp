@@ -2,6 +2,7 @@
   "name": "flomo-mcp",
   "version": "0.1.0",
   "description": "flomo MCP server：通过 CDP 复用本机 flomo 客户端登录态，查询/编辑笔记与标签",
+  "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "bin": {

@@ -1,0 +1,180 @@
+# flomo-mcp 工具清单（维护文档）
+
+> 本文是 flomo-mcp 提供的全部 MCP 工具的**唯一权威清单**。新增/修改工具时必须同步更新本文与文末变更记录。
+> 面向使用者的说明见 [README.md](README.md)。
+
+- server 名称：`flomo-mcp`（stdio）
+- 工具总数：**11**（只读 5 / 写 6）
+- 文中「实现」列对应 `src/tools.ts` 的导出函数；注册处为 `src/index.ts`。
+
+## 总览
+
+| # | 工具 | 类别 | 一句话 | 底层 | 实现 |
+|---|---|---|---|---|---|
+| 1 | `whoami` | 只读 | 验证连接：账号/笔记数/标签数 | Vuex + localStorage 直读（无网络请求） | `whoami` |
+| 2 | `list_memos` | 只读 | 列笔记：recent 最近 200 条 / all 全量翻页 | `GET /memo/latest_updated_desc`、`GET /memo/updated/` | `listMemos` |
+| 3 | `search_memos` | 只读 | 关键词搜正文与标签 | `GET /memo/updated/` 全量翻页 + 本地过滤 | `searchMemos` |
+| 4 | `get_memo` | 只读 | 单条笔记全文（HTML + 纯文本） | `GET /memo/<slug>` | `getMemo` |
+| 5 | `create_memo` | 写 | 创建笔记 | `PUT /memo` | `createMemo` |
+| 6 | `update_memo` | 写 | 更新笔记内容（保留元数据） | `GET /memo/<slug>` + `PUT /memo/<slug>` | `updateMemo` |
+| 7 | `delete_memo` | 写 | 删除（移入回收站） | `DELETE /memo/<slug>` | `deleteMemo` |
+| 8 | `list_tags` | 只读 | 全部标签（含 id/置顶/计数） | Vuex `state.tags` 直读；fallback `GET /tag/updated/` | `listTags` |
+| 9 | `rename_tag` | 写 | 重命名标签 | `POST /tag/rename` | `renameTag` |
+| 10 | `pin_tag` | 写 | 置顶标签 | `POST /tag/pin` | `pinTag` |
+| 11 | `unpin_tag` | 写 | 取消置顶 | `POST /tag/unpin` | `pinTag` |
+
+## 通用约定
+
+**调用链路**：所有工具 → `evalInPage()`（CDP `Runtime.evaluate`，每次新建 WebSocket 短连接，超时 20s）→ flomo 页面上下文 → `$api.callPromise()`。flomo 未带调试口时先自动拉起（`src/cdp.ts` `ensureFlomo`）。
+
+**成功返回**：`src/index.ts` 将工具返回值 `JSON.stringify` 后以 text content 返回，结构见各工具。
+
+**错误返回**：`isError: true`，文本为 `❌ <message>`。API 错误码语义：
+
+| code | 含义 | 处理建议 |
+|---|---|---|
+| `-10` | 未登录 | 打开 flomo 重新登录 |
+| `-20` | 编辑冲突（乐观锁） | 重新取最新内容后再更新 |
+| `-998` | 页面内执行异常（$api 调用抛错） | 检查 flomo 版本是否大改，见「维护」 |
+| `-999` | 响应不是预期 envelope | 同上 |
+
+**数据格式**（flomo 约定，工具内部已处理）：
+
+- `slug`：笔记唯一标识（base62 字符串），所有单笔记操作以它定位
+- `created_at` / `updated_at`：`"YYYY-MM-DD HH:mm:ss"` 本地时区字符串
+- `tz`：`"H:M"` 时区偏移（如东八区 `"8:0"`）
+- 翻页游标 `latest_updated_at`：**unix 秒**（传字符串会被服务端静默忽略——实测踩坑）
+
+---
+
+## 1. `whoami`
+
+验证 flomo 连接，无参数。
+
+```json
+{ "login": true, "email": "us***@example.com", "name": null, "slug": "…",
+  "pro": false, "memo_count": 370, "tag_count": 111 }
+```
+
+未登录时返回提示文本（非错误）。email 已脱敏（保留前 2 位 + 域名）。
+
+## 2. `list_memos`
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `limit` | int 1–200 | 否 | 20 | 返回条数 |
+| `mode` | `"recent"` \| `"all"` | 否 | `recent` | recent=最近更新（最新在前，服务端上限 200 条）；all=全量按更新时间升序游标翻页 |
+| `cursor` | string | 否 | — | 翻页游标，传上次返回的 `next_cursor`（仅 mode=all） |
+
+返回：`{ mode, total, next_cursor?, memos: [ { slug, created_at, updated_at, tags[], excerpt } ] }`
+
+- `excerpt` 为去 HTML 标签后的前 200 字符；翻页到尾页时无 `next_cursor`
+- recent 用 `/memo/latest_updated_desc`（服务端 cap 200）；all 用 `/memo/updated/`（每页 ≤100）
+
+## 3. `search_memos`
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `keyword` | string | 是 | — | 关键词，大小写不敏感，匹配正文（去 HTML）与标签 |
+| `limit` | int 1–200 | 否 | 20 | 命中后最多返回条数 |
+
+返回：`{ keyword, scanned, matched, memos[…] }`（结构同上，按更新时间降序）
+
+> flomo 桌面端**没有远程搜索接口**（应用内搜索走本地 IndexedDB），本工具为全量拉取后本地过滤，保护上限 40 页（4000 条）。笔记量大时考虑放宽。
+
+## 4. `get_memo`
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `slug` | string | 是 | 笔记 slug |
+
+返回：`{ slug, created_at, updated_at, tags[], content_html, content_text }`
+
+> `GET /memo/<slug>` 的响应可能是对象或单元素数组，`fetchMemoRaw()` 已统一处理。
+
+## 5. `create_memo`
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `content` | string | 是 | 笔记内容，支持 HTML；**标签用 `#标签名` 语法写在内容里**（flomo 无独立建标签接口，标签由内容隐式创建） |
+
+返回：`{ ok: true, slug, note }`
+
+## 6. `update_memo`
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `slug` | string | 是 | 笔记 slug |
+| `content` | string | 是 | 新内容（全量替换，非追加） |
+
+返回：`{ ok: true, slug, updated_at }`
+
+实现先 `GET /memo/<slug>` 取原笔记，自动保留 `created_at`、`file_ids`（附件）、`pin`，再带 `local_updated_at`（unix 秒）提交。**content 是整篇替换**，先 `get_memo` 再改更稳妥。
+
+## 7. `delete_memo`
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `slug` | string | 是 | 笔记 slug |
+
+返回：`{ ok: true, slug, note: "已移入回收站" }`。可在 flomo 回收站恢复。
+
+## 8. `list_tags`
+
+无参数。返回：`{ source: "memory" | "api", total, tags: [ { id, name, pinned, count? } ] }`
+
+- 优先 Vuex `state.tags` 内存直读（毫秒级、全量、含 count）
+- flomo 未完成同步时 fallback `/tag/updated/` 游标翻页（**服务端每页仅 ~8 条**，属已知的窗口限制，此时无 count）
+
+## 9. `rename_tag`
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `old_name` | string | 是 | 当前标签名 |
+| `new_name` | string | 是 | 新标签名，层级用 `/` 分隔（如 `阅读/读书`） |
+
+返回：`{ ok: true, from, to }`
+
+按**名字**调 `/tag/rename`，存在性由服务器裁决（不依赖 Vuex 快照——新建标签在 Vuex 里可能滞后）。
+
+## 10/11. `pin_tag` / `unpin_tag`
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `tag` | string | 是 | 标签名 |
+
+返回：`{ ok: true, tag, pinned: true|false }`
+
+---
+
+## 维护指南
+
+### flomo 更新后检查清单
+
+1. 重跑 `npm run patch-flomo`（更新会覆盖注入的 asar）
+2. `curl -s http://127.0.0.1:9222/json/version` 确认调试口
+3. 跑 `node test-e2e.mjs` 全量回归。若批量报 `-998/-999`，多半是 flomo 改了页面结构，在 flomo 页面控制台验证两个锚点：
+   - `window.__flomoVuexStore` 是否存在
+   - `window.__flomoVuexStore._vm.$api` 及 `callPromise` 是否可调用
+4. 若 `$api` 没了，需重新逆向：签名算法为 `md5(参数按 key 排序拼 k=v& + salt "dbbc3dd73364b4084c3a69346e0ce2b2")`
+
+### 已知限制（设计如此，勿当 bug 修）
+
+- 无远程搜索 API → `search_memos` 是全量拉取 + 本地过滤
+- `/memo/latest_updated_desc` 服务端 cap 200 条
+- `/tag/updated/` 每页 ~8 条 → `list_tags` 优先 Vuex 直读
+- 写操作走 **V1** 相对路径（V2 `callMemoWrite` 更新会触发 code=-20 乐观锁冲突，实测）
+- 翻页游标必须 unix 秒
+
+### 新增工具的步骤
+
+1. `src/tools.ts`：实现导出函数 + 在 `schemas` 补 zod schema
+2. `src/index.ts`：`server.registerTool(name, { description, inputSchema }, handler)`
+3. `test-e2e.mjs` 补测试（写操作必须闭环清理）
+4. **更新本文**：总览表 + 详情节 + 变更记录
+
+### 变更记录
+
+| 日期 | 版本 | 变更 |
+|---|---|---|
+| 2026-11-07 | 0.1.0 | 首版：11 工具（whoami/list_memos/search_memos/get_memo/create_memo/update_memo/delete_memo/list_tags/rename_tag/pin_tag/unpin_tag），e2e 全绿，ASAR 注入交付 |
