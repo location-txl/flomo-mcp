@@ -48,7 +48,7 @@ AI 客户端 ──stdio──▶ flomo-mcp ──CDP(127.0.0.1:9222)──▶ f
 ### 安装
 
 ```bash
-git clone <repo-url> ~/flomo-mcp
+git clone https://github.com/location-txl/flomo-mcp.git ~/flomo-mcp
 cd ~/flomo-mcp
 npm install
 npm run build

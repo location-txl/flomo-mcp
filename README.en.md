@@ -48,7 +48,7 @@ All 11 tools (5 read-only / 6 write) with parameters and return shapes are docum
 ### Install
 
 ```bash
-git clone <repo-url> ~/flomo-mcp
+git clone https://github.com/location-txl/flomo-mcp.git ~/flomo-mcp
 cd ~/flomo-mcp
 npm install
 npm run build
