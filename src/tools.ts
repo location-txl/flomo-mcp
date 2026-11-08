@@ -265,7 +265,7 @@ async function fetchAllTags(): Promise<TagBrief[]> {
   if (fromStore?.ok && fromStore.tags?.length) {
     return fromStore.tags;
   }
-  // fallback：API（服务器每页较小，unix 游标循环；无 count）
+  // fallback：API（服务器每页较小，(updated_at, id) 双游标循环；无 count）
   const all: FlomoTag[] = [];
   let curUa = 0;
   let curId: number | null = null;
@@ -273,15 +273,15 @@ async function fetchAllTags(): Promise<TagBrief[]> {
     const params: Record<string, unknown> = { limit: 500, latest_updated_at: curUa, tz: tzStr() };
     if (curId !== null) params.latest_id = curId;
     const batch = await callApi<FlomoTag[]>("GET", "/tag/updated/", params);
-    const arr = (Array.isArray(batch) ? batch : []).filter((t) => !t.deleted_at);
-    all.push(...arr);
-    if (arr.length === 0) break;
-    const last = arr[arr.length - 1];
-    const newUa = uaToUnix(String(last.updated_at ?? ""));
-    if (page > 0 && newUa <= curUa) break;
-    curUa = newUa;
+    // 游标推进与终止必须基于原始行：deleted 过滤后整页可能为空或不满页，据此断页会漏数据；
+    // 同页内 updated_at 相同属正常，靠 latest_id 游标继续翻，不能按时间戳不前进就停
+    const rows = Array.isArray(batch) ? batch : [];
+    all.push(...rows.filter((t) => !t.deleted_at));
+    if (rows.length === 0) break;
+    const last = rows[rows.length - 1];
+    curUa = uaToUnix(String(last.updated_at ?? ""));
     curId = last.id;
-    if (arr.length < 8) break;
+    if (rows.length < 8) break;
   }
   return all.map((t) => ({ id: t.id, name: t.name, pinned: !!t.pin, count: undefined }));
 }
