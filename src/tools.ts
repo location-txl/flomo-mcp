@@ -9,12 +9,18 @@ export interface FlomoMemo {
   content: string;
   created_at: string;
   updated_at?: string;
+  /** 回收站标记：/memo/updated/ 与 latest_updated_desc 均会返回已删除行，必须过滤 */
+  deleted_at?: string | null;
+  deleted_at_long?: number | null;
   tags?: string[] | { name?: string }[];
   file_ids?: string[];
   pinned?: number;
   pin?: number;
   [k: string]: unknown;
 }
+
+/** 非回收站行（deleted_at / deleted_at_long 任一非空即已删除） */
+const alive = (m: FlomoMemo) => !m.deleted_at && !m.deleted_at_long;
 
 export interface FlomoTag {
   id: number;
@@ -123,7 +129,8 @@ function decodeTagCursor(s: string): TagCursor | null {
   } catch { return null; }
 }
 
-/** 全量拉取笔记（升序 unix 游标翻页），最多 40 页保护。返回是否打满上限 */
+/** 全量拉取笔记（升序 unix 游标翻页），最多 40 页保护。返回是否打满上限。
+ *  游标推进基于原始行（整页皆回收站行时过滤后为空但仍有下一页）；已删除行不入结果 */
 async function scanAllMemos(): Promise<{ memos: FlomoMemo[]; truncated: boolean }> {
   const all: FlomoMemo[] = [];
   let cur: ListCursor | null = null;
@@ -132,11 +139,11 @@ async function scanAllMemos(): Promise<{ memos: FlomoMemo[]; truncated: boolean 
     if (cur?.ua) params.latest_updated_at = cur.ua;
     if (cur?.slug) params.latest_slug = cur.slug;
     const batch = await callApi<FlomoMemo[]>("GET", "/memo/updated/", params);
-    const arr = Array.isArray(batch) ? batch : [];
-    all.push(...arr);
-    if (arr.length < 100) return { memos: all, truncated: false };
+    const rows = Array.isArray(batch) ? batch : [];
+    all.push(...rows.filter(alive));
+    if (rows.length < 100) return { memos: all, truncated: false };
     if (page === 39) return { memos: all, truncated: true };
-    const last = arr[arr.length - 1];
+    const last = rows[rows.length - 1];
     cur = { ua: uaToUnix(String(last.updated_at ?? "")), slug: String(last.slug ?? "") };
   }
   return { memos: all, truncated: false };
@@ -179,7 +186,7 @@ export async function listMemos(limit: number, mode: "recent" | "all", cursor?: 
   }
   if (mode === "recent") {
     const memos = await callApi<FlomoMemo[]>("GET", "/memo/latest_updated_desc", { limit: 200, tz: tzStr() });
-    const arr = (Array.isArray(memos) ? memos : []).slice(0, limit);
+    const arr = (Array.isArray(memos) ? memos : []).filter(alive).slice(0, limit);
     return { mode, count: arr.length, memos: arr.map((m) => memoBrief(m)) };
   }
   const cur = cursor !== undefined ? decodeListCursor(cursor) : null;
@@ -191,9 +198,10 @@ export async function listMemos(limit: number, mode: "recent" | "all", cursor?: 
   if (cur?.ua) params.latest_updated_at = cur.ua;
   if (cur?.slug) params.latest_slug = cur.slug;
   const memos = await callApi<FlomoMemo[]>("GET", "/memo/updated/", params);
-  const arr = Array.isArray(memos) ? memos : [];
-  const last = arr[arr.length - 1];
-  const next = last && arr.length >= pageSize
+  const rows = Array.isArray(memos) ? memos : [];
+  const arr = rows.filter(alive);
+  const last = rows[rows.length - 1];
+  const next = last && rows.length >= pageSize
     ? { next_cursor: encodeListCursor({ ua: uaToUnix(String(last.updated_at ?? "")), slug: String(last.slug ?? "") }) }
     : {};
   return { mode, count: arr.length, ...next, memos: arr.map((m) => memoBrief(m)) };

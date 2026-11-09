@@ -77,6 +77,7 @@
 
 - `excerpt` 为去 HTML 标签（已解码实体）后的前 200 字符；翻页到尾页时无 `next_cursor`
 - 游标无效或与当次 `tag` 不匹配时报错"请从第一页重新开始"
+- **已排除回收站笔记**：两个数据源（`/memo/latest_updated_desc`、`/memo/updated/`）都会返回已删除行（多端同步需要），本工具一律按 `deleted_at` 过滤，只返回存活笔记
 - recent 用 `/memo/latest_updated_desc`（服务端 cap 200）；all 用 `/memo/updated/`（每页 ≤100）
 - tag 过滤：flomo 无按标签查询的 API（应用内点标签也是本地过滤），本工具全量拉取 `/memo/updated/` 后按 memo 自带 `tags` 字段前缀匹配，与 `search_memos` 同一套全量扫描+offset 游标机制（`complete`/`scanned` 语义相同）
 
@@ -92,6 +93,7 @@
 
 - `matched`=匹配总数，`count`=本次返回条数；`matched > count` 时用 `next_cursor` 取下一页
 - `complete: false` 表示触达 40 页（4000 条）扫描保护上限，结果可能不全
+- **已排除回收站笔记**（与 `list_memos` 同一过滤口径）
 - flomo 桌面端**没有远程搜索接口**（应用内搜索走本地 IndexedDB），本工具为全量拉取后本地过滤；游标编码 `{kw, offset}`，翻页时重新扫描按偏移切片（无服务端状态），翻页期间笔记更新可能导致少量偏移
 
 ## 4. `get_memo`
