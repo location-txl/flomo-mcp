@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+# PR 连续推送只保留最新一次运行；main 上的每个提交都完整执行
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  # 保留同一个必需检查：纯文档改动只跳过类型检查，过滤失败则让 job 失败。
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          predicate-quantifier: every
+          filters: |
+            non_docs:
+              - '**'
+              - '!**/*.md'
+              - '!LICENSE'
+      - uses: actions/setup-node@v5
+        if: steps.filter.outputs.non_docs != 'false'
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.filter.outputs.non_docs != 'false'
+        run: |
+          npm ci
+          npx tsc --noEmit

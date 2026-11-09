@@ -42,18 +42,24 @@ async function main() {
 
   const bg = path.join(work, "background.js");
   const src = await readFile(bg, "utf8");
+  let needPack = true;
   if (src.includes(MARK)) {
     console.log("[4/6] 已注入过，跳过注入");
-    return;
+    needPack = false;
+  } else {
+    await writeFile(bg, INJECT + src);
+    console.log("[4/6] 已注入 remote-debugging-port=9222 到 background.js");
   }
-  await writeFile(bg, INJECT + src);
-  console.log("[4/6] 已注入 remote-debugging-port=9222 到 background.js");
 
-  const newAsar = path.join(work, "app.asar.new");
-  console.log("[5/6] 重打包 asar…");
-  // 原有的 app.asar.unpacked（keytar 原生模块）内容未变，保持不动
-  await exec("npx", ["-y", "@electron/asar", "pack", work, newAsar, "--unpack-dir", "node_modules/keytar"]);
-  await exec("cp", [newAsar, ASAR]);
+  if (needPack) {
+    const newAsar = path.join(work, "app.asar.new");
+    console.log("[5/6] 重打包 asar…");
+    // 原有的 app.asar.unpacked（keytar 原生模块）内容未变，保持不动
+    await exec("npx", ["-y", "@electron/asar", "pack", work, newAsar, "--unpack-dir", "node_modules/keytar"]);
+    await exec("cp", [newAsar, ASAR]);
+  } else {
+    console.log("[5/6] asar 已是注入版，跳过重打包");
+  }
 
   console.log("[6/6] ad-hoc 重新签名…");
   await exec("codesign", ["--force", "--deep", "--sign", "-", APP]);

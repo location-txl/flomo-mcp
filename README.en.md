@@ -37,7 +37,7 @@ MCP client ──stdio──▶ flomo-mcp ──CDP(127.0.0.1:9222)──▶ flo
 | "List my tags and pin 'books'" | `list_tags` + `pin_tag` |
 | "Rename tag books to reading/books" | `rename_tag` |
 
-All 11 tools (5 read-only / 6 write) with parameters and return shapes are documented in **[TOOLS.md](TOOLS.md)** (Chinese).
+All 12 tools (5 read-only / 7 write) with parameters and return shapes are documented in **[TOOLS.md](TOOLS.md)** (Chinese).
 
 ## Usage
 
@@ -142,7 +142,7 @@ codesign --force --deep --sign - "/Applications/flomo.app"
 
 ```bash
 npm run build          # compile to dist/ (required after code changes)
-node test-e2e.mjs      # end-to-end test of all 11 tools
+node test-e2e.mjs      # end-to-end test of all 12 tools
 npm run patch-flomo    # ASAR patch (optional)
 ```
 
@@ -166,6 +166,7 @@ scripts/
 
 - **[TOOLS.md](TOOLS.md)** — authoritative tool reference: parameters, return shapes, underlying endpoints, maintenance guide (Chinese)
 - **[AGENT.md](AGENT.md)** — architecture constraints, rules derived from reverse engineering, post-update troubleshooting (Chinese)
+- **[Release guide](https://github.com/location-txl/flomo-mcp/blob/main/docs/releasing.md)** — configure npm Trusted Publishing and release from a Git tag (Chinese)
 
 ## License
 

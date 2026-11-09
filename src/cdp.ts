@@ -25,16 +25,25 @@ export async function cdpAlive(): Promise<boolean> {
   }
 }
 
+/** pgrep 无匹配时以 exit 1 结束（promisify 会抛错），吞掉后只看进程是否在跑 */
+async function flomoRunning(): Promise<boolean> {
+  try {
+    const { stdout } = await exec("pgrep", ["-x", "flomo"]);
+    return !!stdout.trim();
+  } catch {
+    return false;
+  }
+}
+
 /** 确保调起带调试口的 flomo：未启动则带参拉起；已启动但无调试口则重启 */
 export async function ensureFlomo(): Promise<void> {
   if (await cdpAlive()) return;
 
-  const { stdout } = await exec("pgrep", ["-x", "flomo"]);
-  if (stdout.trim()) {
+  if (await flomoRunning()) {
     await exec("osascript", ["-e", 'quit app "flomo"']);
     for (let i = 0; i < 10; i++) {
       await sleep(500);
-      try { const r = await exec("pgrep", ["-x", "flomo"]); if (!r.stdout.trim()) break; } catch { break; }
+      if (!(await flomoRunning())) break;
     }
   }
   await exec("open", ["-a", FLOMO_APP, "--args", `--remote-debugging-port=${CDP_PORT}`]);
