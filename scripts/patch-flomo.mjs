@@ -16,6 +16,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { extractAll, createPackageWithOptions } from "@electron/asar";
 
 const exec = promisify(execFileCb);
 const APP = process.argv[2] ?? "/Applications/flomo.app";
@@ -38,7 +39,7 @@ async function main() {
 
   const work = await mkdtemp(path.join(tmpdir(), "flomo-patch-"));
   console.log(`[3/6] 解包 → ${work}`);
-  await exec("npx", ["-y", "@electron/asar", "extract", ASAR, work]);
+  extractAll(ASAR, work);
 
   const bg = path.join(work, "background.js");
   const src = await readFile(bg, "utf8");
@@ -55,7 +56,7 @@ async function main() {
     const newAsar = path.join(work, "app.asar.new");
     console.log("[5/6] 重打包 asar…");
     // 原有的 app.asar.unpacked（keytar 原生模块）内容未变，保持不动
-    await exec("npx", ["-y", "@electron/asar", "pack", work, newAsar, "--unpack-dir", "node_modules/keytar"]);
+    await createPackageWithOptions(work, newAsar, { unpackDir: "node_modules/keytar" });
     await exec("cp", [newAsar, ASAR]);
   } else {
     console.log("[5/6] asar 已是注入版，跳过重打包");
