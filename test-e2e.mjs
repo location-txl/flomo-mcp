@@ -3,7 +3,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const client = new Client({ name: "flomo-mcp-test", version: "0.2.0" });
-const transport = new StdioClientTransport({ command: "node", args: ["dist/index.js"] });
+// SDK 只向子进程透传 HOME/PATH 等白名单 env，FLOMO_APP_PATH 必须显式转发（否则 flomo 未运行时按默认路径拉起失败）
+const env = process.env.FLOMO_APP_PATH ? { FLOMO_APP_PATH: process.env.FLOMO_APP_PATH } : undefined;
+const transport = new StdioClientTransport({ command: "node", args: ["dist/index.js"], env });
 await client.connect(transport);
 
 const call = async (name, args = {}) => {
