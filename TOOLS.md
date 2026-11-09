@@ -232,3 +232,4 @@
 | 2026-11-08 | 0.2.0 | 按 MCP 规范全量整改输出：全部工具声明 `outputSchema` 并返回 `structuredContent`（SDK 强制校验）；可缺失字段统一 `null` 不丢字段；`list_memos` `total`→`count`、坏游标报错；`search_memos` 支持游标翻页（`{kw,offset}` 无状态重扫）并新增 `complete` 截断标记；`update_memo` 移除本地伪造的 `updated_at`；`create_memo` slug 缺失改报错；`whoami` 未登录改 isError；`get_memo` tags 统一字符串数组、纯文本解码 HTML 实体；写工具移除 `ok: true` 冗余字段与参数回显；`list_tags` 行统一含 `total_descendants`；错误文案可行动化（去 `❌` 前缀）；补 zod 显式依赖 |
 | 2026-11-08 | 未发布 | 新增第 12 个工具 `sync`：手动同步（等同点击 flomo 同步按钮），页面内直调 LocalDB `syncWithPromise()`（webpackChunk 注入捕获 require，模块 id 漂移时按签名扫描兜底），返回 pull/push 统计；同步进行中返回 `SYNCING` 不报错 |
 | 2026-11-08 | 未发布 | `list_memos` 新增 `tag` 参数：按标签过滤列出该标签下笔记（前缀匹配含子标签，与 `list_tags` 后代计数同口径），传 `tag` 时忽略 `mode`，全量扫描本地过滤后按更新时间降序游标翻页（`{tag,offset}` 游标，返回结构对齐 `search_memos`） |
+| 2026-11-09 | 未发布 | `list_memos`/`search_memos` 排除回收站笔记（flomo 两个数据源均会返回 `deleted_at` 行，此前误把已删除笔记当正常内容返回）；`sync` 对 server 自动拉起的 flomo 增加页面就绪轮询（冷启动首个调用不再"require 捕获失败"） |

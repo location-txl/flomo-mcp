@@ -325,8 +325,12 @@ interface SyncResult {
 export async function sync() {
   const r = await evalInPage<SyncResult>(`(async function(){
     let req=null;
-    try{window.webpackChunkflomo.push([[Math.floor(Math.random()*1e9)+1e6],{},function(r){req=r;}]);}catch(e){}
-    if(!req)return{ok:false,message:"webpack require 捕获失败"};
+    // server 自动拉起的 flomo 主窗口可能仍在加载（webpackChunkflomo 未就绪），短暂轮询等待
+    for(let i=0;i<40&&!req;i++){
+      try{window.webpackChunkflomo.push([[Math.floor(Math.random()*1e9)+1e6],{},function(r){req=r;}]);}catch(e){}
+      if(!req)await new Promise(w=>setTimeout(w,500));
+    }
+    if(!req)return{ok:false,message:"flomo 页面尚未就绪或 require 捕获失败"};
     let cls=null;
     try{const m=req(77142);cls=m&&m.Ay;}catch(e){}
     if(!cls||typeof cls.syncWithPromise!=="function"){
