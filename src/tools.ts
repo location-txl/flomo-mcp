@@ -525,7 +525,7 @@ const memoBriefShape = {
 };
 
 const tagRowShape = {
-  id: z.number().int().nullable().describe("标签 id；null 表示虚拟中间层节点（无实体标签）"),
+  id: z.number().int().nullable().describe("标签 id，flomo 本地生成、重建后可能变化，勿作稳定主键（操作用 name）；null 表示虚拟中间层节点"),
   name: z.string().describe("标签名（含完整层级路径，如 阅读/读书）"),
   pinned: z.boolean(),
   count: z.number().int().nullable().describe("笔记计数；null 表示不可用"),

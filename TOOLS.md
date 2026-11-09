@@ -166,13 +166,13 @@
             { "id": null, "name": "阅读/杂谈", "pinned": false, "count": 7, "direct_children": 2, "total_descendants": 3 } ] }
 ```
 
-- `id: null` 表示虚拟中间层节点（只建过 `#阅读/杂谈/xx` 而从未单独用过 `#阅读/杂谈`）
-- `count`：一级视图为分支内合计（可能重复计数）；`null` 表示计数不可用（API fallback 路径无 count）
+- `id` 由 flomo 本地生成、标签重建后可能变化，勿作稳定主键（操作一律用 name）；`id: null` 表示虚拟中间层节点（只建过 `#阅读/杂谈/xx` 而从未单独用过 `#阅读/杂谈`）
+- `count`：flomo 的标签计数**含后代标签**，一级视图按分支求和会偏大——估算某标签下实际笔记数请用 `list_memos` 传 tag 的 `matched`；`null` 表示计数不可用（flomo 冷启动初期内存快照可能无 count；API fallback 路径始终无 count）
 - `direct_children=0` 即叶子，无需继续下钻；`total_descendants` 为其下所有层级的实体标签总数
 - 子级返回完整 name（含路径）；`recursive=true` 只返回实体标签
 - `tag_name` 既非任何标签名也非任何前缀时报错（附恢复提示）；叶子标签查子级返回空列表属正常
 - 一级视图排序：置顶优先，其余按名字
-- 数据获取：优先 Vuex `state.tags` 内存直读（毫秒级、全量、含 count）；flomo 未完成同步时 fallback `/tag/updated/` 游标翻页（**服务端每页仅 ~8 条**，属已知的窗口限制，此时无 count）
+- 数据获取：优先 Vuex `state.tags` 内存直读（毫秒级、全量；count 可能缺失，见上）；flomo 未完成同步时 fallback `/tag/updated/` 游标翻页（**服务端每页仅 ~8 条**，属已知的窗口限制，此时无 count）
 
 ## 10. `rename_tag`
 
