@@ -168,6 +168,8 @@ scripts/
 - **[AGENT.md](AGENT.md)** — architecture constraints, rules derived from reverse engineering, post-update troubleshooting (Chinese)
 - **[Release guide](https://github.com/location-txl/flomo-mcp/blob/main/docs/releasing.md)** — configure npm Trusted Publishing and release from a Git tag (Chinese)
 
+Project website source and publishing instructions: **[Website maintenance](docs/website.md)**.
+
 ## License
 
 [MIT](LICENSE)

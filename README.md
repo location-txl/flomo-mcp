@@ -168,6 +168,8 @@ scripts/
 - **[AGENT.md](AGENT.md)** — 架构约束、逆向得出的不可破坏规则、flomo 更新后的排查步骤
 - **[发布流程](docs/releasing.md)** — 配置 npm Trusted Publisher，通过 Git 标签发布 npm 和 GitHub Release
 
+项目宣传站源码与发布说明见 **[网站维护文档](docs/website.md)**。
+
 ## License
 
 [MIT](LICENSE)
